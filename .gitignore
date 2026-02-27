@@ -1,0 +1,67 @@
+# =========================
+# Visual Studio / MSBuild
+# =========================
+.vs/
+**/.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build folders
+[Bb]in/
+[Oo]bj/
+x64/
+x86/
+ARM/
+ARM64/
+Debug/
+Release/
+Releases/
+out/
+build/
+Build/
+
+# Intermediate / compiler outputs
+*.obj
+*.iobj
+*.ipdb
+*.pdb
+*.idb
+*.ilk
+*.pch
+*.ipch
+*.tlog
+*.log
+*.lastbuildstate
+*.cache
+*.db
+*.opendb
+*.VC.db
+*.VC.VC.opendb
+*.aps
+*.res
+*.exe.recipe
+
+# CMake / Ninja / Meson noise (keep build scripts themselves)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+.ninja_deps
+.ninja_log
+meson-private/
+meson-logs/
+
+# Windows junk
+Thumbs.db
+Desktop.ini
+
+# Optional: packaging outputs
+*.zip
+*.rar
+
+# =========================
+# If you WANT to keep built exe in repo, remove these two lines:
+# =========================
+*.exe
