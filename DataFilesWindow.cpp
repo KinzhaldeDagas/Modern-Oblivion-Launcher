@@ -1,170 +1,40 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <shlwapi.h>
-#include <shlobj.h>       // <-- Add this
+#include <shlobj.h>
 #include "DataFilesWindow.h"
 #include <vector>
-#include <unordered_map>
 #include <string>
 #include <fstream>
 #include <algorithm>
 #include <winreg.h>
 
-
-
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
 
-#define IDC_PLUGIN_LIST 1001
-#define IDC_OK_BUTTON 1002
-#define IDC_CANCEL_BUTTON 1003
+#define IDC_PLUGIN_LIST      1001
+#define IDC_OK_BUTTON        1002
+#define IDC_CANCEL_BUTTON    1003
+#define IDC_RESET_BUTTON     1004
+#define IDC_DESCRIPTION_EDIT 1005
 
 static std::vector<std::wstring> pluginFiles;
 static std::vector<std::wstring> activePlugins;
-static HWND hPluginList;
+static HWND hPluginList = NULL;
+static HWND hPluginName = NULL;
+static HWND hCreatedBy = NULL;
+static HWND hDescription = NULL;
+static HWND hCreatedOn = NULL;
+static HWND hModifiedOn = NULL;
 static std::wstring dataPath;
 
 static HFONT g_hCommonFont = NULL;
-static std::wstring g_fontFaceName;
-static std::wstring g_fontFilePath;
 
 static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     if (a.empty()) return b;
     if (b.empty()) return a;
     if (a.back() == L'\\') return a + b;
     return a + L"\\" + b;
-}
-
-static std::wstring GetExeDir() {
-    wchar_t buf[MAX_PATH] = {};
-    GetModuleFileNameW(NULL, buf, MAX_PATH);
-    PathRemoveFileSpecW(buf);
-    return buf;
-}
-
-static std::wstring ParentDir(std::wstring p) {
-    if (p.empty()) return p;
-    wchar_t tmp[MAX_PATH] = {};
-    wcsncpy_s(tmp, p.c_str(), _TRUNCATE);
-    PathRemoveFileSpecW(tmp);
-    return tmp;
-}
-
-static std::wstring FindFontFileNearSolutionRoot() {
-    const std::wstring fontName = L"oblivionfont.ttf";
-    const std::wstring slnName = L"Modern Oblivion Launcher.sln";
-
-    std::vector<std::wstring> roots;
-    {
-        wchar_t cwd[MAX_PATH] = {};
-        GetCurrentDirectoryW(MAX_PATH, cwd);
-        roots.push_back(cwd);
-    }
-    roots.push_back(GetExeDir());
-
-    for (const auto& start : roots) {
-        std::wstring dir = start;
-        for (int i = 0; i < 6 && !dir.empty(); i++) {
-            const std::wstring fontPath = JoinPath(dir, fontName);
-            if (PathFileExistsW(fontPath.c_str())) return fontPath;
-
-            const std::wstring slnPath = JoinPath(dir, slnName);
-            if (PathFileExistsW(slnPath.c_str())) {
-                const std::wstring slnFont = JoinPath(dir, fontName);
-                if (PathFileExistsW(slnFont.c_str())) return slnFont;
-            }
-            dir = ParentDir(dir);
-        }
-    }
-    return L"";
-}
-
-static uint16_t ReadU16BE(const uint8_t* p) { return (uint16_t)((p[0] << 8) | p[1]); }
-static uint32_t ReadU32BE(const uint8_t* p) { return (uint32_t)((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]); }
-
-static std::wstring ExtractFamilyNameFromTTF(const std::wstring& ttfPath) {
-    std::ifstream f(ttfPath, std::ios::binary);
-    if (!f) return L"";
-    f.seekg(0, std::ios::end);
-    const std::streamoff sz = f.tellg();
-    if (sz <= 0 || sz > (50ll * 1024ll * 1024ll)) return L"";
-    f.seekg(0, std::ios::beg);
-    std::vector<uint8_t> bytes((size_t)sz);
-    f.read((char*)bytes.data(), sz);
-    if (!f || bytes.size() < 12) return L"";
-
-    const uint16_t numTables = ReadU16BE(&bytes[4]);
-    if (bytes.size() < 12ull + (size_t)numTables * 16ull) return L"";
-
-    uint32_t nameOffset = 0, nameLength = 0;
-    for (uint16_t i = 0; i < numTables; i++) {
-        const size_t off = 12ull + (size_t)i * 16ull;
-        const uint32_t tag = ReadU32BE(&bytes[off + 0]);
-        const uint32_t to = ReadU32BE(&bytes[off + 8]);
-        const uint32_t tl = ReadU32BE(&bytes[off + 12]);
-        if (tag == 0x6E616D65u) { nameOffset = to; nameLength = tl; break; } // 'name'
-    }
-    if (!nameOffset || nameOffset + nameLength > bytes.size() || nameLength < 6) return L"";
-
-    const uint8_t* nt = bytes.data() + nameOffset;
-    const uint16_t count = ReadU16BE(nt + 2);
-    const uint16_t stringOffset = ReadU16BE(nt + 4);
-    if (6ull + (size_t)count * 12ull > nameLength) return L"";
-
-    auto pick = [&](uint16_t wantedNameId) -> std::wstring {
-        for (uint16_t i = 0; i < count; i++) {
-            const uint8_t* r = nt + 6 + (size_t)i * 12;
-            const uint16_t platformID = ReadU16BE(r + 0);
-            const uint16_t encodingID = ReadU16BE(r + 2);
-            const uint16_t languageID = ReadU16BE(r + 4);
-            const uint16_t nameID = ReadU16BE(r + 6);
-            const uint16_t len = ReadU16BE(r + 8);
-            const uint16_t roff = ReadU16BE(r + 10);
-
-            if (platformID != 3) continue;
-            if (!(encodingID == 0 || encodingID == 1 || encodingID == 10)) continue;
-            if (languageID != 0x0409) continue;
-            if (nameID != wantedNameId) continue;
-
-            const size_t sbase = nameOffset + (size_t)stringOffset + (size_t)roff;
-            if (sbase + len > bytes.size()) continue;
-
-            std::wstring out;
-            out.reserve(len / 2);
-            for (size_t j = 0; j + 1 < len; j += 2) {
-                const uint8_t b0 = bytes[sbase + j];
-                const uint8_t b1 = bytes[sbase + j + 1];
-                const wchar_t wc = (wchar_t)((b0 << 8) | b1);
-                if (wc) out.push_back(wc);
-            }
-            return out;
-        }
-        return L"";
-        };
-
-    std::wstring fam = pick(1);
-    if (!fam.empty()) return fam;
-    return pick(4);
-}
-
-static HFONT LoadOblivionFontFromFile(float pt, bool bold) {
-    g_fontFilePath = FindFontFileNearSolutionRoot();
-    if (g_fontFilePath.empty()) return NULL;
-
-    g_fontFaceName = ExtractFamilyNameFromTTF(g_fontFilePath);
-    if (g_fontFaceName.empty()) g_fontFaceName = L"Oblivion";
-
-    // (disabled) AddFontResourceExW(g_fontFilePath.c_str(), FR_PRIVATE, NULL);
-    HDC hdc = GetDC(NULL);
-    const int logpx = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(NULL, hdc);
-    const int height = -MulDiv((int)(pt + 0.5f), logpx, 72);
-
-    LOGFONTW lf = {};
-    lf.lfHeight = height;
-    lf.lfWeight = bold ? FW_BOLD : FW_NORMAL;
-    wcsncpy_s(lf.lfFaceName, g_fontFaceName.c_str(), _TRUNCATE);
-    return CreateFontIndirectW(&lf);
 }
 
 std::wstring GetOblivionDataPath() {
@@ -182,6 +52,18 @@ std::wstring GetOblivionDataPath() {
     return L"";
 }
 
+static std::wstring FormatDate(const FILETIME& ft) {
+    FILETIME localFt = {};
+    SYSTEMTIME st = {};
+    if (!FileTimeToLocalFileTime(&ft, &localFt) || !FileTimeToSystemTime(&localFt, &st)) {
+        return L"Unknown";
+    }
+
+    wchar_t buf[64] = {};
+    swprintf_s(buf, L"%02d/%02d/%04d", st.wMonth, st.wDay, st.wYear);
+    return buf;
+}
+
 void LoadPlugins() {
     pluginFiles.clear();
 
@@ -194,6 +76,10 @@ void LoadPlugins() {
         } while (FindNextFile(hFind, &findData));
         FindClose(hFind);
     }
+
+    std::sort(pluginFiles.begin(), pluginFiles.end(), [](const std::wstring& a, const std::wstring& b) {
+        return _wcsicmp(a.c_str(), b.c_str()) < 0;
+    });
 }
 
 void LoadActivePlugins() {
@@ -249,6 +135,78 @@ void PopulatePluginList(HWND hwndList) {
     }
 }
 
+static void SetCommonFont(HWND hwnd) {
+    if (hwnd && g_hCommonFont) {
+        SendMessage(hwnd, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
+    }
+}
+
+static void UpdatePluginDetails(int selectedIndex) {
+    if (selectedIndex < 0 || selectedIndex >= (int)pluginFiles.size()) {
+        SetWindowTextW(hPluginName, L"");
+        SetWindowTextW(hCreatedBy, L"Created by: Unknown");
+        SetWindowTextW(hDescription, L"");
+        SetWindowTextW(hCreatedOn, L"Created on: Unknown");
+        SetWindowTextW(hModifiedOn, L"Last modified: Unknown");
+        return;
+    }
+
+    const std::wstring& plugin = pluginFiles[(size_t)selectedIndex];
+    SetWindowTextW(hPluginName, plugin.c_str());
+
+    const std::wstring extension = PathFindExtensionW(plugin.c_str()) ? PathFindExtensionW(plugin.c_str()) : L"";
+    std::wstring createdBy = L"Created by: " + (extension == L".esm" ? std::wstring(L"Bethesda Softworks") : std::wstring(L"Mod Author"));
+    SetWindowTextW(hCreatedBy, createdBy.c_str());
+
+    std::wstring pluginPath = JoinPath(dataPath, plugin);
+    WIN32_FIND_DATA fd = {};
+    HANDLE hFind = FindFirstFileW(pluginPath.c_str(), &fd);
+    std::wstring createdOn = L"Created on: Unknown";
+    std::wstring modifiedOn = L"Last modified: Unknown";
+    if (hFind != INVALID_HANDLE_VALUE) {
+        FindClose(hFind);
+        createdOn = L"Created on: " + FormatDate(fd.ftCreationTime);
+        modifiedOn = L"Last modified: " + FormatDate(fd.ftLastWriteTime);
+    }
+
+    SetWindowTextW(hCreatedOn, createdOn.c_str());
+    SetWindowTextW(hModifiedOn, modifiedOn.c_str());
+
+    std::wstring desc;
+    desc += L"\r\n";
+    desc += L"No description data available for this plugin.\r\n\r\n";
+    desc += L"Master Files Required:\r\n";
+    desc += (extension == L".esm") ? L"(none)" : L"Oblivion.esm";
+    SetWindowTextW(hDescription, desc.c_str());
+}
+
+static void SelectFirstPlugin() {
+    if (!hPluginList || pluginFiles.empty()) {
+        UpdatePluginDetails(-1);
+        return;
+    }
+
+    ListView_SetItemState(hPluginList, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_EnsureVisible(hPluginList, 0, FALSE);
+    UpdatePluginDetails(0);
+}
+
+static void ResetToDefaults() {
+    const int count = ListView_GetItemCount(hPluginList);
+    for (int i = 0; i < count; ++i) {
+        ListView_SetCheckState(hPluginList, i, FALSE);
+    }
+
+    for (int i = 0; i < count; ++i) {
+        wchar_t buffer[MAX_PATH] = {};
+        ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
+        if (_wcsicmp(buffer, L"Oblivion.esm") == 0) {
+            ListView_SetCheckState(hPluginList, i, TRUE);
+            break;
+        }
+    }
+}
+
 LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_CREATE:
@@ -256,36 +214,79 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         INITCOMMONCONTROLSEX icex = { sizeof(INITCOMMONCONTROLSEX), ICC_LISTVIEW_CLASSES };
         InitCommonControlsEx(&icex);
 
-        hPluginList = CreateWindowEx(WS_EX_CLIENTEDGE, WC_LISTVIEW, NULL,
-            WS_VISIBLE | WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER,
-            10, 10, 460, 400,
-            hwnd, (HMENU)IDC_PLUGIN_LIST, NULL, NULL);
-
         g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        if (!g_hCommonFont)
-            g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
-        if (hPluginList)
-            SendMessage(hPluginList, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
+        HWND hDataFilesLabel = CreateWindowW(L"STATIC", L"Data Files:", WS_VISIBLE | WS_CHILD,
+            18, 18, 100, 22, hwnd, NULL, NULL, NULL);
+        SetCommonFont(hDataFilesLabel);
+
+        HWND hLeftFrame = CreateWindowW(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_GROUPBOX,
+            18, 42, 348, 474, hwnd, NULL, NULL, NULL);
+        SetCommonFont(hLeftFrame);
+
+        hPluginList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, NULL,
+            WS_VISIBLE | WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER,
+            28, 56, 338, 434,
+            hwnd, (HMENU)IDC_PLUGIN_LIST, NULL, NULL);
+        SetCommonFont(hPluginList);
 
         ListView_SetExtendedListViewStyle(hPluginList, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
-
-        LVCOLUMN col = { LVCF_WIDTH, 0, 440 };
+        LVCOLUMNW col = {};
+        col.mask = LVCF_WIDTH;
+        col.cx = 318;
         ListView_InsertColumn(hPluginList, 0, &col);
 
-        HWND hOk = CreateWindow(L"BUTTON", L"OK", WS_VISIBLE | WS_CHILD,
-            200, 420, 80, 30,
-            hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
+        hPluginName = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD,
+            378, 44, 288, 24, hwnd, NULL, NULL, NULL);
+        SetCommonFont(hPluginName);
 
-        HWND hCancel = CreateWindow(L"BUTTON", L"Cancel", WS_VISIBLE | WS_CHILD,
-            290, 420, 80, 30,
+        hCreatedBy = CreateWindowW(L"STATIC", L"Created by: Unknown", WS_VISIBLE | WS_CHILD,
+            378, 70, 288, 24, hwnd, NULL, NULL, NULL);
+        SetCommonFont(hCreatedBy);
+
+        hDescription = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_VISIBLE | WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,
+            378, 98, 288, 316,
+            hwnd, (HMENU)IDC_DESCRIPTION_EDIT, NULL, NULL);
+        SetCommonFont(hDescription);
+
+        hCreatedOn = CreateWindowW(L"STATIC", L"Created on: Unknown", WS_VISIBLE | WS_CHILD,
+            378, 426, 288, 24, hwnd, NULL, NULL, NULL);
+        SetCommonFont(hCreatedOn);
+
+        hModifiedOn = CreateWindowW(L"STATIC", L"Last modified: Unknown", WS_VISIBLE | WS_CHILD,
+            378, 452, 288, 24, hwnd, NULL, NULL, NULL);
+        SetCommonFont(hModifiedOn);
+
+        HWND hReset = CreateWindowW(L"BUTTON", L"Reset to Defaults", WS_VISIBLE | WS_CHILD,
+            18, 530, 288, 36,
+            hwnd, (HMENU)IDC_RESET_BUTTON, NULL, NULL);
+        SetCommonFont(hReset);
+
+        HWND hCancel = CreateWindowW(L"BUTTON", L"Cancel", WS_VISIBLE | WS_CHILD,
+            372, 530, 136, 36,
             hwnd, (HMENU)IDC_CANCEL_BUTTON, NULL, NULL);
+        SetCommonFont(hCancel);
 
-        if (hOk) SendMessage(hOk, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
-        if (hCancel) SendMessage(hCancel, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
+        HWND hOk = CreateWindowW(L"BUTTON", L"OK", WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+            524, 530, 136, 36,
+            hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
+        SetCommonFont(hOk);
 
         PopulatePluginList(hPluginList);
+        SelectFirstPlugin();
         return 0;
+    }
+    case WM_NOTIFY:
+    {
+        NMHDR* hdr = reinterpret_cast<NMHDR*>(lParam);
+        if (hdr && hdr->idFrom == IDC_PLUGIN_LIST && hdr->code == LVN_ITEMCHANGED) {
+            NMLISTVIEW* lv = reinterpret_cast<NMLISTVIEW*>(lParam);
+            if (lv && (lv->uNewState & LVIS_SELECTED) && lv->iItem >= 0) {
+                UpdatePluginDetails(lv->iItem);
+            }
+        }
+        break;
     }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -296,17 +297,16 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDC_CANCEL_BUTTON:
             DestroyWindow(hwnd);
             return 0;
+        case IDC_RESET_BUTTON:
+            ResetToDefaults();
+            return 0;
         }
         break;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
     case WM_DESTROY:
-        if (g_hCommonFont && g_hCommonFont != (HFONT)GetStockObject(DEFAULT_GUI_FONT)) {
-            DeleteObject(g_hCommonFont);
-            g_hCommonFont = NULL;
-        }
-        if (!g_fontFilePath.empty()) {
-            g_fontFilePath.clear();
-            g_fontFaceName.clear();
-        }
+        g_hCommonFont = NULL;
         return 0;
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
@@ -322,16 +322,19 @@ void OpenDataFilesWindow(HWND hParent) {
     LoadPlugins();
     LoadActivePlugins();
 
-    WNDCLASS wc = {};
+    WNDCLASSW wc = {};
     wc.lpfnWndProc = DataFilesWndProc;
     wc.hInstance = GetModuleHandle(NULL);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
     wc.lpszClassName = L"DataFilesWindow";
-    RegisterClass(&wc);
+    RegisterClassW(&wc);
 
-    HWND hwnd = CreateWindowEx(0, L"DataFilesWindow", L"Data Files",
-        WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME,
-        CW_USEDEFAULT, CW_USEDEFAULT, 500, 500,
+    HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"DataFilesWindow", L"Oblivion: Data Files",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+        CW_USEDEFAULT, CW_USEDEFAULT, 702, 624,
         hParent, NULL, GetModuleHandle(NULL), NULL);
 
     ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
 }
