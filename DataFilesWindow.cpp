@@ -5,6 +5,7 @@
 #include "DataFilesWindow.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -85,6 +86,80 @@ static std::wstring GetPluginsTxtPath() {
     return JoinPath(oblivionDir, L"Plugins.txt");
 }
 
+
+struct PluginHeaderMetadata {
+    std::wstring author;
+    std::wstring description;
+    std::vector<std::wstring> masters;
+};
+
+static uint16_t ReadU16LE(const unsigned char* p) {
+    return (uint16_t)(p[0] | (uint16_t(p[1]) << 8));
+}
+
+static uint32_t ReadU32LE(const unsigned char* p) {
+    return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+}
+
+static std::wstring ReadWindows1252String(const std::vector<unsigned char>& bytes) {
+    if (bytes.empty()) return L"";
+    int needed = MultiByteToWideChar(1252, 0, reinterpret_cast<const char*>(bytes.data()), (int)bytes.size(), nullptr, 0);
+    if (needed <= 0) return L"";
+    std::wstring out((size_t)needed, L'\0');
+    MultiByteToWideChar(1252, 0, reinterpret_cast<const char*>(bytes.data()), (int)bytes.size(), out.data(), needed);
+    while (!out.empty() && (out.back() == L'\0' || out.back() == L'\r' || out.back() == L'\n')) out.pop_back();
+    return out;
+}
+
+static bool ReadPluginHeaderMetadata(const std::wstring& pluginName, PluginHeaderMetadata* outMeta) {
+    if (!outMeta) return false;
+    *outMeta = {};
+
+    std::ifstream f(JoinPath(dataPath, pluginName), std::ios::binary);
+    if (!f) return false;
+
+    std::vector<unsigned char> recordHeader(24);
+    f.read(reinterpret_cast<char*>(recordHeader.data()), (std::streamsize)recordHeader.size());
+    if (!f || recordHeader[0] != 'T' || recordHeader[1] != 'E' || recordHeader[2] != 'S' || recordHeader[3] != '4') {
+        return false;
+    }
+
+    const uint32_t dataSize = ReadU32LE(&recordHeader[4]);
+    if (dataSize == 0 || dataSize > (16u * 1024u * 1024u)) {
+        return false;
+    }
+
+    std::vector<unsigned char> data(dataSize);
+    f.read(reinterpret_cast<char*>(data.data()), (std::streamsize)data.size());
+    if (!f) return false;
+
+    size_t off = 0;
+    while (off + 6 <= data.size()) {
+        const unsigned char* sh = &data[off];
+        const uint16_t subLen = ReadU16LE(&sh[4]);
+        off += 6;
+        if (off + subLen > data.size()) break;
+
+        const std::vector<unsigned char> payload(data.begin() + off, data.begin() + off + subLen);
+        off += subLen;
+
+        const bool isCNAM = sh[0] == 'C' && sh[1] == 'N' && sh[2] == 'A' && sh[3] == 'M';
+        const bool isSNAM = sh[0] == 'S' && sh[1] == 'N' && sh[2] == 'A' && sh[3] == 'M';
+        const bool isMAST = sh[0] == 'M' && sh[1] == 'A' && sh[2] == 'S' && sh[3] == 'T';
+
+        if (isCNAM) {
+            outMeta->author = ReadWindows1252String(payload);
+        } else if (isSNAM) {
+            outMeta->description = ReadWindows1252String(payload);
+        } else if (isMAST) {
+            std::wstring master = ReadWindows1252String(payload);
+            if (!master.empty()) outMeta->masters.push_back(master);
+        }
+    }
+
+    return true;
+}
+
 static bool GetPluginFileInfo(const std::wstring& pluginName, WIN32_FILE_ATTRIBUTE_DATA* outFileInfo) {
     if (!outFileInfo) return false;
     const std::wstring pluginPath = JoinPath(dataPath, pluginName);
@@ -103,7 +178,12 @@ static void UpdatePluginDetails(int selectedIndex) {
 
     const std::wstring& plugin = pluginFiles[(size_t)selectedIndex];
     SetWindowTextW(hPluginName, plugin.c_str());
-    SetWindowTextW(hCreatedBy, L"Created by: Unknown");
+
+    PluginHeaderMetadata meta = {};
+    ReadPluginHeaderMetadata(plugin, &meta);
+
+    const std::wstring author = meta.author.empty() ? L"Unknown" : meta.author;
+    SetWindowTextW(hCreatedBy, (L"Created by: " + author).c_str());
 
     WIN32_FILE_ATTRIBUTE_DATA fileInfo = {};
     std::wstring createdOn = L"Created on: Unknown";
@@ -121,9 +201,23 @@ static void UpdatePluginDetails(int selectedIndex) {
 
     std::wstring desc;
     desc += L"\r\n";
-    desc += L"No description data available for this plugin.\r\n\r\n";
+    if (!meta.description.empty()) {
+        desc += meta.description + L"\r\n\r\n";
+    }
+    else {
+        desc += L"No description data available for this plugin.\r\n\r\n";
+    }
     desc += L"Master Files Required:\r\n";
-    desc += isMaster ? L"(none)" : L"Oblivion.esm";
+    if (!meta.masters.empty()) {
+        for (size_t i = 0; i < meta.masters.size(); ++i) {
+            desc += meta.masters[i];
+            if (i + 1 < meta.masters.size()) desc += L"\r\n";
+        }
+    }
+    else {
+        desc += isMaster ? L"(none)" : L"Oblivion.esm";
+    }
+
     SetWindowTextW(hDescription, desc.c_str());
 }
 
