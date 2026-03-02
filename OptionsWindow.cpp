@@ -521,6 +521,21 @@ static LRESULT CALLBACK ScrollHostSubclassProc(HWND hwnd, UINT msg, WPARAM wPara
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
+static LRESULT CALLBACK ContentSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
+{
+    switch (msg)
+    {
+    case WM_COMMAND:
+    case WM_HSCROLL:
+    case WM_VSCROLL:
+        if (gWnd) return SendMessageW(gWnd, msg, wParam, lParam);
+        return 0;
+    default:
+        break;
+    }
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
 // ----------------------------------------------------------------------------
 // Preset file IO
 // ----------------------------------------------------------------------------
@@ -1915,6 +1930,7 @@ static void BuildUI(HWND hwnd)
 
     gContent = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
         0, 0, w, 10, gScrollHost, (HMENU)(INT_PTR)2001, GetModuleHandleW(nullptr), nullptr);
+    SetWindowSubclass(gContent, ContentSubclassProc, 2, 0);
 
     SetCtrlFont(gScrollHost);
     SetCtrlFont(gContent);
@@ -2478,6 +2494,8 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     case WM_DESTROY:
         if (gScrollHost)
             RemoveWindowSubclass(gScrollHost, ScrollHostSubclassProc, 1);
+        if (gContent)
+            RemoveWindowSubclass(gContent, ContentSubclassProc, 2);
 
         if (gFont) { DeleteObject(gFont); gFont = nullptr; }
 
