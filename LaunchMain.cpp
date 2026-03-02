@@ -13,6 +13,7 @@
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(linker, "/MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\"")
 #include "resource.h"
 #include "OptionsWindow.h"
 #include "DataFilesWindow.h"
@@ -25,6 +26,7 @@ using namespace Gdiplus;
 #define BUTTON_HEIGHT 35
 #define BUTTON_SPACING 20
 #define EXTRA_LEFT_SHIFT 32
+#define CSE_BUTTON_EXTRA_WIDTH 16
 
 enum ButtonIDs {
     ID_BUTTON_PLAY = 1,
@@ -51,6 +53,7 @@ static HINSTANCE g_hInstance = nullptr;
 static HWND g_hLaunchCseButton = nullptr;
 static ConstructionSetLaunchMode g_csLaunchMode = ConstructionSetLaunchMode::None;
 static std::wstring g_csLaunchPath;
+static std::wstring g_csLaunchWorkingDir;
 
 static std::unordered_map<HWND, bool> g_btnHot;
 
@@ -334,6 +337,7 @@ static std::wstring ResolveOblivionRootPath() {
 static void DetectConstructionSetLaunchTarget() {
     g_csLaunchMode = ConstructionSetLaunchMode::None;
     g_csLaunchPath.clear();
+    g_csLaunchWorkingDir.clear();
 
     const std::wstring rootPath = ResolveOblivionRootPath();
     const std::wstring oblivionExe = rootPath + L"Oblivion.exe";
@@ -347,12 +351,14 @@ static void DetectConstructionSetLaunchTarget() {
     if (PathFileExistsW(cseBatch.c_str())) {
         g_csLaunchMode = ConstructionSetLaunchMode::Batch;
         g_csLaunchPath = cseBatch;
+        g_csLaunchWorkingDir = rootPath;
         return;
     }
 
     if (PathFileExistsW(csExe.c_str())) {
         g_csLaunchMode = ConstructionSetLaunchMode::Exe;
         g_csLaunchPath = csExe;
+        g_csLaunchWorkingDir = rootPath;
     }
 }
 
@@ -360,7 +366,28 @@ static void LaunchConstructionSet() {
     if (g_csLaunchMode == ConstructionSetLaunchMode::None || g_csLaunchPath.empty()) {
         return;
     }
-    ShellExecuteW(nullptr, L"open", g_csLaunchPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+
+    if (g_csLaunchMode == ConstructionSetLaunchMode::Batch) {
+        std::wstring params = L"/C \"\"" + g_csLaunchPath + L"\"\"";
+        ShellExecuteW(
+            nullptr,
+            L"open",
+            L"cmd.exe",
+            params.c_str(),
+            g_csLaunchWorkingDir.empty() ? nullptr : g_csLaunchWorkingDir.c_str(),
+            SW_SHOWNORMAL
+        );
+        return;
+    }
+
+    ShellExecuteW(
+        nullptr,
+        L"open",
+        g_csLaunchPath.c_str(),
+        nullptr,
+        g_csLaunchWorkingDir.empty() ? nullptr : g_csLaunchWorkingDir.c_str(),
+        SW_SHOWNORMAL
+    );
 }
 
 void DrawButtonItem(const DRAWITEMSTRUCT* ds) {
@@ -436,6 +463,8 @@ void DrawButtonItem(const DRAWITEMSTRUCT* ds) {
     if (down) {
         rc.left++; rc.right++; rc.top++; rc.bottom++;
     }
+    rc.left += 4;
+    rc.right -= 4;
     DrawTextW(dc, txt, -1, &rc, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
 }
 
@@ -477,9 +506,9 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             L"BUTTON",
             cseText,
             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-            xPos,
+            xPos - (CSE_BUTTON_EXTRA_WIDTH / 2),
             startY + 1 * (BUTTON_HEIGHT + BUTTON_SPACING),
-            BUTTON_WIDTH,
+            BUTTON_WIDTH + CSE_BUTTON_EXTRA_WIDTH,
             BUTTON_HEIGHT,
             hWnd,
             (HMENU)(INT_PTR)ID_BUTTON_LAUNCH_CSE,
