@@ -118,7 +118,8 @@ static bool ReadPluginHeaderMetadata(const std::wstring& pluginName, PluginHeade
     std::ifstream f(JoinPath(dataPath, pluginName), std::ios::binary);
     if (!f) return false;
 
-    std::vector<unsigned char> recordHeader(24);
+    // Oblivion/TES4 record headers are 20 bytes for this record type (TES4).
+    std::vector<unsigned char> recordHeader(20);
     f.read(reinterpret_cast<char*>(recordHeader.data()), (std::streamsize)recordHeader.size());
     if (!f || recordHeader[0] != 'T' || recordHeader[1] != 'E' || recordHeader[2] != 'S' || recordHeader[3] != '4') {
         return false;
