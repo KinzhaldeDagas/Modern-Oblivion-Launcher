@@ -14,7 +14,6 @@
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "msimg32.lib")
 
 #define IDC_PLUGIN_LIST 1001
 #define IDC_OK_BUTTON 1002
@@ -24,8 +23,6 @@ static std::vector<std::wstring> pluginFiles;
 static std::vector<std::wstring> activePlugins;
 static HWND hPluginList;
 static std::wstring dataPath;
-
-static std::unordered_map<HWND, bool> g_btnHot;
 
 static HFONT g_hCommonFont = NULL;
 static std::wstring g_fontFaceName;
@@ -170,119 +167,6 @@ static HFONT LoadOblivionFontFromFile(float pt, bool bold) {
     return CreateFontIndirectW(&lf);
 }
 
-static LRESULT CALLBACK HoverBtnSubProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam,
-    UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
-    switch (msg) {
-    case WM_NCDESTROY:
-        g_btnHot.erase(hWnd);
-        RemoveWindowSubclass(hWnd, HoverBtnSubProc, uIdSubclass);
-        break;
-    case WM_MOUSEMOVE: {
-        if (!g_btnHot[hWnd]) {
-            g_btnHot[hWnd] = true;
-            TRACKMOUSEEVENT tme = { sizeof(tme) };
-            tme.dwFlags = TME_LEAVE;
-            tme.hwndTrack = hWnd;
-            TrackMouseEvent(&tme);
-            InvalidateRect(hWnd, nullptr, TRUE);
-        }
-        break;
-    }
-    case WM_MOUSELEAVE:
-        if (g_btnHot[hWnd]) {
-            g_btnHot[hWnd] = false;
-            InvalidateRect(hWnd, nullptr, TRUE);
-        }
-        break;
-    }
-    return DefSubclassProc(hWnd, msg, wParam, lParam);
-}
-
-static void AlphaFillRect(HDC dc, const RECT& rc, COLORREF rgb, BYTE alpha) {
-    const int w = rc.right - rc.left;
-    const int h = rc.bottom - rc.top;
-    if (w <= 0 || h <= 0) return;
-
-    BITMAPINFO bi = {};
-    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth = 1;
-    bi.bmiHeader.biHeight = 1;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = nullptr;
-    HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!bmp || !bits) {
-        if (bmp) DeleteObject(bmp);
-        return;
-    }
-
-    // BGRA
-    const BYTE r = GetRValue(rgb);
-    const BYTE g = GetGValue(rgb);
-    const BYTE b = GetBValue(rgb);
-    ((BYTE*)bits)[0] = b;
-    ((BYTE*)bits)[1] = g;
-    ((BYTE*)bits)[2] = r;
-    ((BYTE*)bits)[3] = alpha;
-
-    HDC mem = CreateCompatibleDC(dc);
-    HGDIOBJ old = SelectObject(mem, bmp);
-
-    BLENDFUNCTION bf = {};
-    bf.BlendOp = AC_SRC_OVER;
-    bf.SourceConstantAlpha = 255;
-    bf.AlphaFormat = AC_SRC_ALPHA;
-
-    AlphaBlend(dc, rc.left, rc.top, w, h, mem, 0, 0, 1, 1, bf);
-
-    SelectObject(mem, old);
-    DeleteDC(mem);
-    DeleteObject(bmp);
-}
-
-static void DrawHoverButton(const DRAWITEMSTRUCT* ds) {
-    HDC dc = ds->hDC;
-    RECT rc = ds->rcItem;
-
-    const bool hot = (g_btnHot.find(ds->hwndItem) != g_btnHot.end()) ? g_btnHot[ds->hwndItem] : false;
-    const bool down = (ds->itemState & ODS_SELECTED) != 0;
-
-    FillRect(dc, &rc, (HBRUSH)(COLOR_BTNFACE + 1));
-
-    // Hover background only (88% opacity). Also show while pressed.
-    if (hot || down) {
-        const BYTE a = down ? 200 : 224; // 200/255 ~ 78%, 224/255 ~ 88%
-        AlphaFillRect(dc, rc, GetSysColor(COLOR_HIGHLIGHT), a);
-        FrameRect(dc, &rc, GetSysColorBrush(COLOR_HIGHLIGHT));
-    }
-
-    wchar_t text[128] = {};
-    GetWindowTextW(ds->hwndItem, text, 128);
-
-    HFONT hFont = (HFONT)SendMessage(ds->hwndItem, WM_GETFONT, 0, 0);
-    if (!hFont) hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-    HFONT oldFont = (HFONT)SelectObject(dc, hFont);
-
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
-
-    RECT tr = rc;
-    if (down) OffsetRect(&tr, 1, 1);
-
-    DrawTextW(dc, text, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-    SelectObject(dc, oldFont);
-
-    if (ds->itemState & ODS_FOCUS) {
-        RECT fr = rc;
-        InflateRect(&fr, -3, -3);
-        DrawFocusRect(dc, &fr);
-    }
-}
-
-
 std::wstring GetOblivionDataPath() {
     HKEY hKey;
     wchar_t path[MAX_PATH];
@@ -389,31 +273,19 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         LVCOLUMN col = { LVCF_WIDTH, 0, 440 };
         ListView_InsertColumn(hPluginList, 0, &col);
 
-        HWND hOk = CreateWindow(L"BUTTON", L"OK", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+        HWND hOk = CreateWindow(L"BUTTON", L"OK", WS_VISIBLE | WS_CHILD,
             200, 420, 80, 30,
             hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
 
-        HWND hCancel = CreateWindow(L"BUTTON", L"Cancel", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+        HWND hCancel = CreateWindow(L"BUTTON", L"Cancel", WS_VISIBLE | WS_CHILD,
             290, 420, 80, 30,
             hwnd, (HMENU)IDC_CANCEL_BUTTON, NULL, NULL);
 
         if (hOk) SendMessage(hOk, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
         if (hCancel) SendMessage(hCancel, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
 
-        if (hOk) SetWindowSubclass(hOk, HoverBtnSubProc, 1, 0);
-        if (hCancel) SetWindowSubclass(hCancel, HoverBtnSubProc, 1, 0);
-
         PopulatePluginList(hPluginList);
         return 0;
-    }
-    case WM_DRAWITEM:
-    {
-        DRAWITEMSTRUCT* ds = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-        if (ds && ds->CtlType == ODT_BUTTON) {
-            DrawHoverButton(ds);
-            return TRUE;
-        }
-        break;
     }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
