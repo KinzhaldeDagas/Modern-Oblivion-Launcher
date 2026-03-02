@@ -71,8 +71,6 @@ static HWND gBtnApply = nullptr;
 static HWND gBtnCancel = nullptr;
 static HWND gBtnDefaults = nullptr;
 static HWND gBtnSavePreset = nullptr;
-static HWND gBtnOrcRequired = nullptr;
-static HWND gBtnOrcRecommended = nullptr;
 
 static HWND gResCombo = nullptr;
 static HWND gWinModeCombo = nullptr;
@@ -141,8 +139,6 @@ static const int IDC_APPLY = 1101;
 static const int IDC_CANCEL = 1102;
 static const int IDC_DEFAULTS = 1103;
 static const int IDC_SAVE_PRESET = 1104;
-static const int IDC_ORC_REQUIRED = 1105;
-static const int IDC_ORC_RECOMMENDED = 1106;
 
 static const int IDC_RES_COMBO = 1200;
 static const int IDC_WINMODE_COMBO = 1201;
@@ -1139,41 +1135,6 @@ static void ApplyControlsToINI()
     }
 }
 
-// ORC presets
-static void ApplyOrcRequiredToINI()
-{
-    WriteINIInt(L"Display", L"bDoHighDynamicRange", 1);
-    WriteINIInt(L"Display", L"bDoBloom", 0);
-
-    WriteINIInt(L"Display", L"HDR", 1);
-
-    WriteINIInt(L"Display", L"bShadowsOnGrass", 0);
-    WriteINIInt(L"Display", L"bDoCanopyShadowPass", 0);
-
-    WriteINIInt(L"Display", L"iShadowFilter", 2);
-    WriteINIInt(L"Display", L"bDoSpecularPass", 1);
-
-    WriteINIString(L"Display", L"fSpecualrStartMax", L"500.0000");
-
-    WriteINIInt(L"Water", L"bUseWaterDepth", 0);
-    WriteINIInt(L"Water", L"bUseWaterReflectionsStatics", 1);
-    WriteINIInt(L"Water", L"bUseWaterReflectionsTrees", 1);
-}
-
-static void ApplyOrcRecommendedToINI()
-{
-    WriteINIInt(L"TerrainManager", L"uGridDistantCount", 30);
-    WriteINIInt(L"Trees", L"uGridDistantTreeRange", 30);
-
-    WriteINIInt(L"Water", L"bUseWaterReflectionsStatics", 1);
-    WriteINIInt(L"Water", L"bUseWaterReflectionsTrees", 1);
-
-    WriteINIString(L"Controls", L"fJumpAnimDelay", L"0.2500");
-
-    WriteINIString(L"SpeedTree", L"fLODTreeMipMapLODBias", L"-0.5000");
-    WriteINIString(L"SpeedTree", L"fLocalTreeMipMapLODBias", L"0.0000");
-}
-
 // ----------------------------------------------------------------------------
 // Current state capture (for saving presets)
 // ----------------------------------------------------------------------------
@@ -1853,14 +1814,6 @@ static void BuildUI(HWND hwnd)
         pad, btnY, sx(120), sx(30), hwnd, (HMENU)(INT_PTR)IDC_DEFAULTS, GetModuleHandleW(nullptr), nullptr);
     SetCtrlFont(gBtnDefaults);
 
-    gBtnOrcRequired = CreateWindowExW(0, L"BUTTON", L"ORC Required", WS_CHILD | WS_VISIBLE,
-        pad + sx(130), btnY, sx(130), sx(30), hwnd, (HMENU)(INT_PTR)IDC_ORC_REQUIRED, GetModuleHandleW(nullptr), nullptr);
-    SetCtrlFont(gBtnOrcRequired);
-
-    gBtnOrcRecommended = CreateWindowExW(0, L"BUTTON", L"ORC Recommended", WS_CHILD | WS_VISIBLE,
-        pad + sx(270), btnY, sx(150), sx(30), hwnd, (HMENU)(INT_PTR)IDC_ORC_RECOMMENDED, GetModuleHandleW(nullptr), nullptr);
-    SetCtrlFont(gBtnOrcRecommended);
-
     gBtnCancel = CreateWindowExW(0, L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE,
         w - pad - sx(180), btnY, sx(80), sx(30), hwnd, (HMENU)(INT_PTR)IDC_CANCEL, GetModuleHandleW(nullptr), nullptr);
     SetCtrlFont(gBtnCancel);
@@ -2038,8 +1991,6 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             const int btnY = h - footerH + MulDiv(18, dpi, 96);
 
             if (gBtnDefaults)        SetWindowPos(gBtnDefaults, nullptr, pad, btnY, MulDiv(120, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
-            if (gBtnOrcRequired)     SetWindowPos(gBtnOrcRequired, nullptr, pad + MulDiv(130, dpi, 96), btnY, MulDiv(130, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
-            if (gBtnOrcRecommended)  SetWindowPos(gBtnOrcRecommended, nullptr, pad + MulDiv(270, dpi, 96), btnY, MulDiv(150, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
             if (gBtnCancel)          SetWindowPos(gBtnCancel, nullptr, w - pad - MulDiv(180, dpi, 96), btnY, MulDiv(80, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
             if (gBtnApply)           SetWindowPos(gBtnApply, nullptr, w - pad - MulDiv(90, dpi, 96), btnY, MulDiv(90, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
 
@@ -2107,18 +2058,6 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
         }
 
-        if (id == IDC_ORC_REQUIRED && code == BN_CLICKED)
-        {
-            ApplyOrcRequiredToINI();
-            LoadFromINI();
-            return 0;
-        }
-        if (id == IDC_ORC_RECOMMENDED && code == BN_CLICKED)
-        {
-            ApplyOrcRecommendedToINI();
-            LoadFromINI();
-            return 0;
-        }
         if (id == IDC_CANCEL && code == BN_CLICKED)
         {
             DestroyWindow(hwnd);
