@@ -1912,12 +1912,12 @@ static void BuildUI(HWND hwnd)
     ncm.cbSize = sizeof(ncm);
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
     wcscpy_s(ncm.lfMessageFont.lfFaceName, L"Segoe UI");
-    ncm.lfMessageFont.lfHeight = -sx(12);
+    ncm.lfMessageFont.lfHeight = -sx(11);
     gFont = CreateFontIndirectW(&ncm.lfMessageFont);
 
-    const int pad = sx(14);
+    const int pad = sx(10);
     const int headerH = sx(10);
-    const int footerH = sx(64);
+    const int footerH = sx(56);
 
     RECT rc = {};
     GetClientRect(hwnd, &rc);
@@ -1937,9 +1937,9 @@ static void BuildUI(HWND hwnd)
 
 
     const int contentW = w - pad * 2 - sx(18);
-    const int innerPad = sx(14);
-    const int rowH = sx(26);
-    const int rowGap = sx(8);
+    const int innerPad = sx(10);
+    const int rowH = sx(22);
+    const int rowGap = sx(6);
     const int labelH = sx(18);
     const int comboH = sx(320);
 
@@ -1947,7 +1947,7 @@ static void BuildUI(HWND hwnd)
     const int editW = sx(70);
     const int comboW = sx(190);
 
-    const int laneGap = sx(28);
+    const int laneGap = sx(20);
 
     const int LxLabel = pad + innerPad;
     const int LxCtrl = LxLabel + labelW + sx(10);
@@ -1955,7 +1955,7 @@ static void BuildUI(HWND hwnd)
     const int RxLabel = pad + (contentW / 2) + (laneGap / 2);
     const int RxCtrl = RxLabel + labelW + sx(10);
 
-    const int sliderW = sx(380);
+    const int sliderW = sx(330);
     const int sliderValW = sx(40);
     const int sliderValGap = sx(10);
 
@@ -2057,21 +2057,39 @@ static void BuildUI(HWND hwnd)
     }
 
     {
-        const int gbH = sx(86);
+        const int gbH = sx(74);
         CreateGroupBox(gContent, L"Video Quality Presets", pad, y, contentW, gbH);
-        const int by = y + sx(24);
-        gBtnDefaults = CreateWindowExW(0, L"BUTTON", L"Reset to Defaults", WS_CHILD | WS_VISIBLE,
-            pad + sx(10), by, sx(145), sx(34), gContent, (HMENU)(INT_PTR)IDC_DEFAULTS, GetModuleHandleW(nullptr), nullptr);
-        SetCtrlFont(gBtnDefaults);
-        int px = pad + sx(165);
-        auto mkBtn=[&](HWND& out,const wchar_t* t,int id,int bw){ out=CreateWindowExW(0,L"BUTTON",t,WS_CHILD|WS_VISIBLE,px,by,sx(bw),sx(34),gContent,(HMENU)(INT_PTR)id,GetModuleHandleW(nullptr),nullptr); SetCtrlFont(out); px += sx(bw+10);};
-        mkBtn(gBtnPresetVeryLow, L"Very Low", IDC_PRESET_VERYLOW, 100);
-        mkBtn(gBtnPresetLow, L"Low", IDC_PRESET_LOW, 85);
-        mkBtn(gBtnPresetMedium, L"Medium", IDC_PRESET_MEDIUM, 95);
-        mkBtn(gBtnPresetHigh, L"High", IDC_PRESET_HIGH, 85);
-        mkBtn(gBtnPresetUltra, L"Ultra High", IDC_PRESET_ULTRA, 105);
+        const int by = y + sx(22);
+        const int presetsGap = sx(6);
+        const int defaultBtnW = sx(130);
+        const int btnH = sx(28);
 
-        y += gbH + sx(12);
+        gBtnDefaults = CreateWindowExW(0, L"BUTTON", L"Reset to Defaults", WS_CHILD | WS_VISIBLE,
+            pad + sx(10), by, defaultBtnW, btnH, gContent, (HMENU)(INT_PTR)IDC_DEFAULTS, GetModuleHandleW(nullptr), nullptr);
+        SetCtrlFont(gBtnDefaults);
+
+        const int presetsStartX = pad + sx(10) + defaultBtnW + presetsGap;
+        const int presetsRightPad = sx(10);
+        const int presetsAreaW = (pad + contentW - presetsRightPad) - presetsStartX;
+        const int presetCount = 5;
+        const int presetBtnW = (presetsAreaW - (presetsGap * (presetCount - 1))) / presetCount;
+
+        int px = presetsStartX;
+        auto mkBtn=[&](HWND& out,const wchar_t* t,int id)
+        {
+            out = CreateWindowExW(0, L"BUTTON", t, WS_CHILD | WS_VISIBLE,
+                px, by, presetBtnW, btnH, gContent, (HMENU)(INT_PTR)id, GetModuleHandleW(nullptr), nullptr);
+            SetCtrlFont(out);
+            px += presetBtnW + presetsGap;
+        };
+
+        mkBtn(gBtnPresetVeryLow, L"Very Low", IDC_PRESET_VERYLOW);
+        mkBtn(gBtnPresetLow, L"Low", IDC_PRESET_LOW);
+        mkBtn(gBtnPresetMedium, L"Medium", IDC_PRESET_MEDIUM);
+        mkBtn(gBtnPresetHigh, L"High", IDC_PRESET_HIGH);
+        mkBtn(gBtnPresetUltra, L"Ultra High", IDC_PRESET_ULTRA);
+
+        y += gbH + sx(10);
     }
 
     // ADDITIONAL GRAPHICS
@@ -2258,11 +2276,11 @@ static void BuildUI(HWND hwnd)
     int btnY = h - footerH + sx(18);
 
     gBtnCancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE,
-        w - pad - sx(180), btnY, sx(110), sx(30), hwnd, (HMENU)(INT_PTR)IDC_CANCEL, GetModuleHandleW(nullptr), nullptr);
+        w - pad - sx(164), btnY, sx(100), sx(28), hwnd, (HMENU)(INT_PTR)IDC_CANCEL, GetModuleHandleW(nullptr), nullptr);
     SetCtrlFont(gBtnCancel);
 
     gBtnApply = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE,
-        w - pad - sx(60), btnY, sx(60), sx(30), hwnd, (HMENU)(INT_PTR)IDC_APPLY, GetModuleHandleW(nullptr), nullptr);
+        w - pad - sx(56), btnY, sx(56), sx(28), hwnd, (HMENU)(INT_PTR)IDC_APPLY, GetModuleHandleW(nullptr), nullptr);
     SetCtrlFont(gBtnApply);
 
     PopulatePresetCombo();
@@ -2402,7 +2420,7 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int h = rc.bottom - rc.top;
 
             int headerH = 10;
-            int footerH = 64;
+            int footerH = 56;
 
             int dpi = 96;
             HMODULE user32 = GetModuleHandleW(L"user32.dll");
@@ -2434,11 +2452,11 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (gScrollPos > maxPos) gScrollPos = maxPos;
             SetWindowPos(gContent, nullptr, 0, -gScrollPos, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
-            const int pad = MulDiv(14, dpi, 96);
+            const int pad = MulDiv(10, dpi, 96);
             const int btnY = h - footerH + MulDiv(18, dpi, 96);
 
-            if (gBtnCancel)          SetWindowPos(gBtnCancel, nullptr, w - pad - MulDiv(180, dpi, 96), btnY, MulDiv(110, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
-            if (gBtnApply)           SetWindowPos(gBtnApply, nullptr, w - pad - MulDiv(60, dpi, 96), btnY, MulDiv(60, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
+            if (gBtnCancel)          SetWindowPos(gBtnCancel, nullptr, w - pad - MulDiv(164, dpi, 96), btnY, MulDiv(100, dpi, 96), MulDiv(28, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
+            if (gBtnApply)           SetWindowPos(gBtnApply, nullptr, w - pad - MulDiv(56, dpi, 96), btnY, MulDiv(56, dpi, 96), MulDiv(28, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
         }
         return 0;
 
