@@ -35,6 +35,7 @@
 static int  GetEditInt(HWND h, int fallback);
 static void SetEditInt(HWND h, int v);
 
+
 static void SetCtrlFont(HWND h);
 
 static HWND CreateComboBox(HWND parent, int id, int x, int y, int w, int h);
@@ -630,11 +631,12 @@ static bool SavePresetFile(const std::wstring& path, const std::map<std::wstring
 static bool IsManagedKey(const std::wstring& fullKey)
 {
     static const wchar_t* const kAllowed[] = {
-        L"Display.Resolution",
-        L"Display.Windowed",
-        L"Display.VSync",
+        L"Display.iSize W",
+        L"Display.iSize H",
+        L"Display.bFull Screen",
+        L"Display.iPresentInterval",
         L"Display.HDR",
-        L"Display.AA",
+        L"Display.iMultiSample",
         L"Display.DistantLand",
         L"Display.DistantBuildings",
         L"Display.DistantTrees",
@@ -661,9 +663,9 @@ static bool IsManagedKey(const std::wstring& fullKey)
         L"Audio.MasterVolume",
         L"Audio.EffectsVolume",
         L"Audio.MusicVolume",
-        L"Controls.MouseSensitivity",
-        L"Controls.InvertMouse",
-        L"Controls.AlwaysRun",
+        L"Controls.fMouseSensitivity",
+        L"Controls.bInvertYValues",
+        L"Controls.Always Run",
         L"MAIN.bEnableBorderRegion",
         L"Display.bAllowScreenShot",
         L"Messages.iFileLogging",
@@ -714,10 +716,12 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
     std::wstring v = Trim(inValue);
     if (v.size() > 2048) v.resize(2048);
 
-    if (_wcsicmp(fullKey.c_str(), L"Display.Resolution") == 0)
+    if (_wcsicmp(fullKey.c_str(), L"Display.iSize W") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"Display.iSize H") == 0)
     {
-        if (!ComboContainsText(gResCombo, v)) return false;
-        outValue = v;
+        int n = _wtoi(v.c_str());
+        if (n < 320 || n > 16384) return false;
+        outValue = std::to_wstring(n);
         return true;
     }
 
@@ -728,7 +732,7 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         return true;
     }
 
-    if (_wcsicmp(fullKey.c_str(), L"Display.AA") == 0)
+    if (_wcsicmp(fullKey.c_str(), L"Display.iMultiSample") == 0)
     {
         int aa = _wtoi(v.c_str());
         if (!ComboContainsData(gAaCombo, aa)) return false;
@@ -736,8 +740,8 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         return true;
     }
 
-    if (_wcsicmp(fullKey.c_str(), L"Display.Windowed") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Display.VSync") == 0 ||
+    if (_wcsicmp(fullKey.c_str(), L"Display.bFull Screen") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"Display.iPresentInterval") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Display.HDR") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Display.DistantLand") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Display.DistantBuildings") == 0 ||
@@ -751,8 +755,8 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         _wcsicmp(fullKey.c_str(), L"Water.bUseWaterReflectionsTrees") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Water.bUseWaterDisplacements") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Water.bUseWaterDepth") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Controls.InvertMouse") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Controls.AlwaysRun") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"Controls.bInvertYValues") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"Controls.Always Run") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Display.bAllowScreenShot") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Messages.iFileLogging") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Display.iDebugText") == 0)
@@ -784,7 +788,7 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         _wcsicmp(fullKey.c_str(), L"Audio.MasterVolume") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Audio.EffectsVolume") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Audio.MusicVolume") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Controls.MouseSensitivity") == 0)
+        _wcsicmp(fullKey.c_str(), L"Controls.fMouseSensitivity") == 0)
     {
         int n = _wtoi(v.c_str());
         outValue = std::to_wstring(clamp0100(n));
@@ -912,7 +916,9 @@ static void PopulateResolutions(HWND hCombo)
     for (auto& r : seen)
         AddComboItem(hCombo, r.c_str(), 0);
 
-    std::wstring cur = GetINIString(L"Display", L"Resolution", L"1920x1080");
+    std::wstring curW = GetINIString(L"Display", L"iSize W", L"");
+    std::wstring curH = GetINIString(L"Display", L"iSize H", L"");
+    std::wstring cur = (!curW.empty() && !curH.empty()) ? (curW + L"x" + curH) : L"1920x1080";
 
     int count = (int)SendMessageW(hCombo, CB_GETCOUNT, 0, 0);
     for (int i = 0; i < count; i++)
@@ -940,7 +946,7 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
 
     if (!preserveResolution && gResCombo)
     {
-        std::wstring r = get(L"Display.Resolution", L"1920x1080");
+        std::wstring r = get(L"Display.iSize W", L"1920") + L"x" + get(L"Display.iSize H", L"1080");
         int count = (int)SendMessageW(gResCombo, CB_GETCOUNT, 0, 0);
         for (int i = 0; i < count; i++)
         {
@@ -954,13 +960,13 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
         }
     }
 
-    int windowed = _wtoi(get(L"Display.Windowed", L"0").c_str());
-    SetComboByData(gWinModeCombo, (windowed != 0) ? 1 : 0);
+    int fullScreen = _wtoi(get(L"Display.bFull Screen", L"1").c_str());
+    SetComboByData(gWinModeCombo, (fullScreen != 0) ? 0 : 1);
 
-    SendMessageW(gVsyncCheck, BM_SETCHECK, (_wtoi(get(L"Display.VSync", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gVsyncCheck, BM_SETCHECK, (_wtoi(get(L"Display.iPresentInterval", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gHdrCheck, BM_SETCHECK, (_wtoi(get(L"Display.HDR", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    int aa = _wtoi(get(L"Display.AA", L"0").c_str());
+    int aa = _wtoi(get(L"Display.iMultiSample", L"0").c_str());
     SetComboByData(gAaCombo, aa);
 
     SendMessageW(gDistantLandCheck, BM_SETCHECK, (_wtoi(get(L"Display.DistantLand", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -1026,12 +1032,12 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
     SetTextInt(gEffectsVolVal, ev);
     SetTextInt(gMusicVolVal, mus);
 
-    int ms = clamp01(_wtoi(get(L"Controls.MouseSensitivity", L"50").c_str()));
+    int ms = clamp01(_wtoi(get(L"Controls.fMouseSensitivity", L"50").c_str()));
     SetTrackPos(gMouseSensTrack, ms);
     SetTextInt(gMouseSensVal, ms);
 
-    SendMessageW(gInvertMouseCheck, BM_SETCHECK, (_wtoi(get(L"Controls.InvertMouse", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(gAlwaysRunCheck, BM_SETCHECK, (_wtoi(get(L"Controls.AlwaysRun", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gInvertMouseCheck, BM_SETCHECK, (_wtoi(get(L"Controls.bInvertYValues", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gAlwaysRunCheck, BM_SETCHECK, (_wtoi(get(L"Controls.Always Run", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
     int ber = _wtoi(get(L"MAIN.bEnableBorderRegion", L"1").c_str());
     SendMessageW(gDisableBorderRegionsCheck, BM_SETCHECK, (ber == 0) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -1045,16 +1051,31 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
 
 static void ApplyControlsToINI()
 {
-    WriteINIString(L"Display", L"Resolution", GetComboText(gResCombo));
+    {
+        std::wstring res = GetComboText(gResCombo);
+        size_t x = res.find(L'x');
+        if (x != std::wstring::npos)
+        {
+            std::wstring w = Trim(res.substr(0, x));
+            std::wstring h = Trim(res.substr(x + 1));
+            if (!w.empty() && !h.empty())
+            {
+                WriteINIString(L"Display", L"iSize W", w);
+                WriteINIString(L"Display", L"iSize H", h);
+            }
+        }
+    }
 
     int mode = (int)GetComboData(gWinModeCombo, 0);
-    WriteINIInt(L"Display", L"Windowed", (mode == 0) ? 0 : 1);
+    int fullScreen = (mode == 0) ? 1 : 0;
+    WriteINIInt(L"Display", L"bFull Screen", fullScreen);
 
-    WriteINIInt(L"Display", L"VSync", (SendMessageW(gVsyncCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
+    int vsync = (SendMessageW(gVsyncCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    WriteINIInt(L"Display", L"iPresentInterval", vsync);
     WriteINIInt(L"Display", L"HDR", (SendMessageW(gHdrCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
 
     int aa = (int)GetComboData(gAaCombo, 0);
-    WriteINIInt(L"Display", L"AA", aa);
+    WriteINIInt(L"Display", L"iMultiSample", aa);
 
     WriteINIInt(L"Display", L"DistantLand", (SendMessageW(gDistantLandCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
     WriteINIInt(L"Display", L"DistantBuildings", (SendMessageW(gDistantBuildingsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
@@ -1090,9 +1111,12 @@ static void ApplyControlsToINI()
     WriteINIInt(L"Audio", L"EffectsVolume", GetTrackPos(gEffectsVolTrack, 80));
     WriteINIInt(L"Audio", L"MusicVolume", GetTrackPos(gMusicVolTrack, 70));
 
-    WriteINIInt(L"Controls", L"MouseSensitivity", GetTrackPos(gMouseSensTrack, 50));
-    WriteINIInt(L"Controls", L"InvertMouse", (SendMessageW(gInvertMouseCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
-    WriteINIInt(L"Controls", L"AlwaysRun", (SendMessageW(gAlwaysRunCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
+    int mouseSensitivity = GetTrackPos(gMouseSensTrack, 50);
+    int invertMouse = (SendMessageW(gInvertMouseCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    int alwaysRun = (SendMessageW(gAlwaysRunCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    WriteINIInt(L"Controls", L"fMouseSensitivity", mouseSensitivity);
+    WriteINIInt(L"Controls", L"bInvertYValues", invertMouse);
+    WriteINIInt(L"Controls", L"Always Run", alwaysRun);
 
     WriteINIInt(L"MAIN", L"bEnableBorderRegion",
         (SendMessageW(gDisableBorderRegionsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 0 : 1);
@@ -1157,16 +1181,22 @@ static std::map<std::wstring, std::wstring> CaptureCurrentState()
 {
     std::map<std::wstring, std::wstring> kv;
 
-    kv[L"Display.Resolution"] = GetComboText(gResCombo);
+    std::wstring res = GetComboText(gResCombo);
+    size_t x = res.find(L'x');
+    if (x != std::wstring::npos)
+    {
+        kv[L"Display.iSize W"] = Trim(res.substr(0, x));
+        kv[L"Display.iSize H"] = Trim(res.substr(x + 1));
+    }
 
     int mode = (int)GetComboData(gWinModeCombo, 0);
-    kv[L"Display.Windowed"] = (mode == 0) ? L"0" : L"1";
+    kv[L"Display.bFull Screen"] = (mode == 0) ? L"1" : L"0";
 
-    kv[L"Display.VSync"] = (SendMessageW(gVsyncCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"Display.iPresentInterval"] = (SendMessageW(gVsyncCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
     kv[L"Display.HDR"] = (SendMessageW(gHdrCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
 
     int aa = (int)GetComboData(gAaCombo, 0);
-    kv[L"Display.AA"] = std::to_wstring(aa);
+    kv[L"Display.iMultiSample"] = std::to_wstring(aa);
 
     kv[L"Display.DistantLand"] = (SendMessageW(gDistantLandCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
     kv[L"Display.DistantBuildings"] = (SendMessageW(gDistantBuildingsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
@@ -1202,9 +1232,9 @@ static std::map<std::wstring, std::wstring> CaptureCurrentState()
     kv[L"Audio.EffectsVolume"] = std::to_wstring(GetTrackPos(gEffectsVolTrack, 80));
     kv[L"Audio.MusicVolume"] = std::to_wstring(GetTrackPos(gMusicVolTrack, 70));
 
-    kv[L"Controls.MouseSensitivity"] = std::to_wstring(GetTrackPos(gMouseSensTrack, 50));
-    kv[L"Controls.InvertMouse"] = (SendMessageW(gInvertMouseCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
-    kv[L"Controls.AlwaysRun"] = (SendMessageW(gAlwaysRunCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"Controls.fMouseSensitivity"] = std::to_wstring(GetTrackPos(gMouseSensTrack, 50));
+    kv[L"Controls.bInvertYValues"] = (SendMessageW(gInvertMouseCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"Controls.Always Run"] = (SendMessageW(gAlwaysRunCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
 
     kv[L"MAIN.bEnableBorderRegion"] = (SendMessageW(gDisableBorderRegionsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"0" : L"1";
 
@@ -1357,13 +1387,13 @@ static void LoadFromINI()
 {
     PopulateResolutions(gResCombo);
 
-    int windowed = GetINIInt(L"Display", L"Windowed", 0);
-    SetComboByData(gWinModeCombo, (windowed != 0) ? 1 : 0);
+    int fullScreen = GetINIInt(L"Display", L"bFull Screen", 1);
+    SetComboByData(gWinModeCombo, (fullScreen != 0) ? 0 : 1);
 
-    SendMessageW(gVsyncCheck, BM_SETCHECK, GetINIInt(L"Display", L"VSync", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gVsyncCheck, BM_SETCHECK, GetINIInt(L"Display", L"iPresentInterval", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gHdrCheck, BM_SETCHECK, GetINIInt(L"Display", L"HDR", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    SetComboByData(gAaCombo, GetINIInt(L"Display", L"AA", 0));
+    SetComboByData(gAaCombo, GetINIInt(L"Display", L"iMultiSample", 0));
 
     SendMessageW(gDistantLandCheck, BM_SETCHECK, GetINIInt(L"Display", L"DistantLand", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gDistantBuildingsCheck, BM_SETCHECK, GetINIInt(L"Display", L"DistantBuildings", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -1432,12 +1462,29 @@ static void LoadFromINI()
     SetTextInt(gEffectsVolVal, ev);
     SetTextInt(gMusicVolVal, mus);
 
-    int ms = clamp01(GetINIInt(L"Controls", L"MouseSensitivity", 50));
+    int ms = clamp01(GetINIInt(L"Controls", L"fMouseSensitivity", 50));
     SetTrackPos(gMouseSensTrack, ms);
     SetTextInt(gMouseSensVal, ms);
 
-    SendMessageW(gInvertMouseCheck, BM_SETCHECK, GetINIInt(L"Controls", L"InvertMouse", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(gAlwaysRunCheck, BM_SETCHECK, GetINIInt(L"Controls", L"AlwaysRun", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gInvertMouseCheck, BM_SETCHECK, GetINIInt(L"Controls", L"bInvertYValues", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gAlwaysRunCheck, BM_SETCHECK, GetINIInt(L"Controls", L"Always Run", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    std::wstring rw = GetINIString(L"Display", L"iSize W", L"");
+    std::wstring rh = GetINIString(L"Display", L"iSize H", L"");
+    if (!rw.empty() && !rh.empty())
+    {
+        std::wstring res = rw + L"x" + rh;
+        int cnt = (int)SendMessageW(gResCombo, CB_GETCOUNT, 0, 0);
+        int found = -1;
+        for (int i = 0; i < cnt; i++)
+        {
+            wchar_t t[64] = {};
+            SendMessageW(gResCombo, CB_GETLBTEXT, i, (LPARAM)t);
+            if (_wcsicmp(t, res.c_str()) == 0) { found = i; break; }
+        }
+        if (found >= 0)
+            SendMessageW(gResCombo, CB_SETCURSEL, found, 0);
+    }
 
     int ber = GetINIInt(L"MAIN", L"bEnableBorderRegion", 1);
     SendMessageW(gDisableBorderRegionsCheck, BM_SETCHECK, (ber == 0) ? BST_CHECKED : BST_UNCHECKED, 0);
