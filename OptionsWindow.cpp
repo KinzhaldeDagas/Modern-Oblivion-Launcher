@@ -1192,6 +1192,7 @@ static void ApplyControlsToINI()
             {
                 WriteINIString(L"Display", L"iSize W", w);
                 WriteINIString(L"Display", L"iSize H", h);
+                WriteINIString(L"Display", L"Resolution", w + L"x" + h);
             }
         }
     }
@@ -1207,9 +1208,11 @@ static void ApplyControlsToINI()
         fullScreen = (mode == 0) ? 1 : 0;
     }
     WriteINIInt(L"Display", L"bFull Screen", fullScreen);
+    WriteINIInt(L"Display", L"Windowed", fullScreen ? 0 : 1);
 
     int vsync = (SendMessageW(gVsyncCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
     WriteINIInt(L"Display", L"iPresentInterval", vsync);
+    WriteINIInt(L"Display", L"VSync", vsync);
     if (gEffectsNoneRadio && SendMessageW(gEffectsNoneRadio, BM_GETCHECK, 0, 0) == BST_CHECKED)
     {
         SendMessageW(gHdrCheck, BM_SETCHECK, BST_UNCHECKED, 0);
@@ -1220,11 +1223,18 @@ static void ApplyControlsToINI()
 
     int aa = (int)GetComboData(gAaCombo, 0);
     WriteINIInt(L"Display", L"iMultiSample", aa);
+    WriteINIInt(L"Display", L"AA", aa);
     WriteINIInt(L"Display", L"iAdapter", (int)GetComboData(gAdapterCombo, 0));
 
-    WriteINIInt(L"Display", L"DistantLand", (SendMessageW(gDistantLandCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
-    WriteINIInt(L"Display", L"DistantBuildings", (SendMessageW(gDistantBuildingsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
-    WriteINIInt(L"Display", L"DistantTrees", (SendMessageW(gDistantTreesCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
+    const int distantLand = (SendMessageW(gDistantLandCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    const int distantBuildings = (SendMessageW(gDistantBuildingsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    const int distantTrees = (SendMessageW(gDistantTreesCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    WriteINIInt(L"Display", L"DistantLand", distantLand);
+    WriteINIInt(L"Display", L"DistantBuildings", distantBuildings);
+    WriteINIInt(L"Display", L"DistantTrees", distantTrees);
+    WriteINIInt(L"LOD", L"bDisplayLODLand", distantLand);
+    WriteINIInt(L"LOD", L"bDisplayLODBuildings", distantBuildings);
+    WriteINIInt(L"LOD", L"bDisplayLODTrees", distantTrees);
 
     WriteINIInt(L"Display", L"bDoBloom", (SendMessageW(gBloomCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
     WriteINIInt(L"Display", L"bShadowsOnGrass", (SendMessageW(gShadowsOnGrassCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
@@ -1519,21 +1529,36 @@ static void LoadFromINI()
 {
     PopulateResolutions(gResCombo);
 
-    int fullScreen = GetINIInt(L"Display", L"bFull Screen", 1);
+    int fullScreen = GetINIInt(L"Display", L"bFull Screen", INT_MIN);
+    if (fullScreen == INT_MIN)
+    {
+        int windowed = GetINIInt(L"Display", L"Windowed", 0);
+        fullScreen = windowed ? 0 : 1;
+    }
     if (gFullscreenRadio && gWindowedRadio)
         SendMessageW((fullScreen != 0) ? gFullscreenRadio : gWindowedRadio, BM_SETCHECK, BST_CHECKED, 0);
     else
         SetComboByData(gWinModeCombo, (fullScreen != 0) ? 0 : 1);
 
-    SendMessageW(gVsyncCheck, BM_SETCHECK, GetINIInt(L"Display", L"iPresentInterval", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+    int vsync = GetINIInt(L"Display", L"iPresentInterval", INT_MIN);
+    if (vsync == INT_MIN) vsync = GetINIInt(L"Display", L"VSync", 1);
+    SendMessageW(gVsyncCheck, BM_SETCHECK, vsync ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gHdrCheck, BM_SETCHECK, GetINIInt(L"Display", L"HDR", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    SetComboByData(gAaCombo, GetINIInt(L"Display", L"iMultiSample", 0));
+    int aa = GetINIInt(L"Display", L"iMultiSample", INT_MIN);
+    if (aa == INT_MIN) aa = GetINIInt(L"Display", L"AA", 0);
+    SetComboByData(gAaCombo, aa);
     SetComboByData(gAdapterCombo, GetINIInt(L"Display", L"iAdapter", 0));
 
-    SendMessageW(gDistantLandCheck, BM_SETCHECK, GetINIInt(L"Display", L"DistantLand", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(gDistantBuildingsCheck, BM_SETCHECK, GetINIInt(L"Display", L"DistantBuildings", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(gDistantTreesCheck, BM_SETCHECK, GetINIInt(L"Display", L"DistantTrees", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+    int distLand = GetINIInt(L"Display", L"DistantLand", INT_MIN);
+    if (distLand == INT_MIN) distLand = GetINIInt(L"LOD", L"bDisplayLODLand", 1);
+    int distBuild = GetINIInt(L"Display", L"DistantBuildings", INT_MIN);
+    if (distBuild == INT_MIN) distBuild = GetINIInt(L"LOD", L"bDisplayLODBuildings", 1);
+    int distTrees = GetINIInt(L"Display", L"DistantTrees", INT_MIN);
+    if (distTrees == INT_MIN) distTrees = GetINIInt(L"LOD", L"bDisplayLODTrees", 0);
+    SendMessageW(gDistantLandCheck, BM_SETCHECK, distLand ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gDistantBuildingsCheck, BM_SETCHECK, distBuild ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gDistantTreesCheck, BM_SETCHECK, distTrees ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SendMessageW(gBloomCheck, BM_SETCHECK, GetINIInt(L"Display", L"bDoBloom", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     if (gEffectsNoneRadio)
@@ -1669,16 +1694,144 @@ static void LoadFromINI()
     SetEditInt(gDevConsoleHistoryEdit, GetINIInt(L"Menu", L"iConsoleHistorySize", 100));
 }
 
+static std::map<std::wstring, std::wstring> BuildVideoPresetState(const std::wstring& presetName)
+{
+    std::map<std::wstring, std::wstring> kv;
+
+    // Shared baseline
+    kv[L"Display.bFull Screen"] = L"0";
+    kv[L"Display.iPresentInterval"] = L"1";
+    kv[L"Display.HDR"] = L"1";
+    kv[L"Display.iMultiSample"] = L"0";
+    kv[L"Display.iAdapter"] = L"0";
+    kv[L"Display.DistantLand"] = L"1";
+    kv[L"Display.DistantBuildings"] = L"1";
+    kv[L"Display.DistantTrees"] = L"1";
+    kv[L"Display.bDoBloom"] = L"0";
+    kv[L"Display.bShadowsOnGrass"] = L"0";
+    kv[L"Display.bDoCanopyShadowPass"] = L"0";
+    kv[L"Display.iShadowFilter"] = L"2";
+    kv[L"Display.fSpecualrStartMax"] = L"50";
+    kv[L"Display.bDynamicWindowReflections"] = L"1";
+    kv[L"Water.iWaterMult"] = L"3";
+    kv[L"Water.bUseWaterReflections"] = L"1";
+    kv[L"Water.bUseWaterReflectionsStatics"] = L"1";
+    kv[L"Water.bUseWaterReflectionsTrees"] = L"1";
+    kv[L"Water.bUseWaterDisplacements"] = L"1";
+    kv[L"Water.bUseWaterDepth"] = L"0";
+    kv[L"Decals.iMaxDecalsPerFrame"] = L"10";
+    kv[L"TerrainManager.uGridDistantCount"] = L"30";
+    kv[L"TerrainManager.uGridDistantTreeRange"] = L"30";
+    kv[L"Trees.uGridDistantTreeRange"] = L"30";
+    kv[L"Advanced.TextureSize"] = L"Large";
+    kv[L"Advanced.TreeFade"] = L"100";
+    kv[L"Advanced.ActorFade"] = L"100";
+    kv[L"Advanced.ItemFade"] = L"100";
+    kv[L"Advanced.ObjectFade"] = L"100";
+    kv[L"Controls.fJumpAnimDelay"] = L"0.2500";
+    kv[L"SpeedTree.fLODTreeMipMapLODBias"] = L"-0.5000";
+    kv[L"SpeedTree.fLocalTreeMipMapLODBias"] = L"0.0000";
+
+    const std::wstring n = presetName;
+    if (_wcsicmp(n.c_str(), L"Very Low") == 0)
+    {
+        kv[L"Display.iMultiSample"] = L"0";
+        kv[L"Display.DistantTrees"] = L"0";
+        kv[L"Display.HDR"] = L"0";
+        kv[L"Display.bDoBloom"] = L"0";
+        kv[L"Display.iShadowFilter"] = L"0";
+        kv[L"Display.fSpecualrStartMax"] = L"15";
+        kv[L"Water.iWaterMult"] = L"1";
+        kv[L"Water.bUseWaterReflections"] = L"0";
+        kv[L"Water.bUseWaterDisplacements"] = L"0";
+        kv[L"Display.bDynamicWindowReflections"] = L"0";
+        kv[L"Decals.iMaxDecalsPerFrame"] = L"2";
+        kv[L"Advanced.TextureSize"] = L"Small";
+        kv[L"Advanced.TreeFade"] = L"35";
+        kv[L"Advanced.ActorFade"] = L"35";
+        kv[L"Advanced.ItemFade"] = L"35";
+        kv[L"Advanced.ObjectFade"] = L"35";
+    }
+    else if (_wcsicmp(n.c_str(), L"Low") == 0)
+    {
+        kv[L"Display.DistantTrees"] = L"0";
+        kv[L"Display.HDR"] = L"0";
+        kv[L"Display.bDoBloom"] = L"1";
+        kv[L"Display.iShadowFilter"] = L"1";
+        kv[L"Display.fSpecualrStartMax"] = L"25";
+        kv[L"Water.iWaterMult"] = L"1";
+        kv[L"Water.bUseWaterReflections"] = L"0";
+        kv[L"Water.bUseWaterDisplacements"] = L"0";
+        kv[L"Display.bDynamicWindowReflections"] = L"0";
+        kv[L"Decals.iMaxDecalsPerFrame"] = L"2";
+        kv[L"Advanced.TextureSize"] = L"Medium";
+        kv[L"Advanced.TreeFade"] = L"50";
+        kv[L"Advanced.ActorFade"] = L"50";
+        kv[L"Advanced.ItemFade"] = L"50";
+        kv[L"Advanced.ObjectFade"] = L"50";
+    }
+    else if (_wcsicmp(n.c_str(), L"Medium") == 0)
+    {
+        kv[L"Display.HDR"] = L"1";
+        kv[L"Display.iMultiSample"] = L"2";
+        kv[L"Display.iShadowFilter"] = L"1";
+        kv[L"Display.fSpecualrStartMax"] = L"40";
+        kv[L"Water.iWaterMult"] = L"2";
+        kv[L"Display.bDynamicWindowReflections"] = L"0";
+        kv[L"Decals.iMaxDecalsPerFrame"] = L"5";
+        kv[L"Advanced.TextureSize"] = L"Medium";
+        kv[L"Advanced.TreeFade"] = L"70";
+        kv[L"Advanced.ActorFade"] = L"70";
+        kv[L"Advanced.ItemFade"] = L"70";
+        kv[L"Advanced.ObjectFade"] = L"70";
+    }
+    else if (_wcsicmp(n.c_str(), L"High") == 0)
+    {
+        kv[L"Display.iMultiSample"] = L"4";
+        kv[L"Display.iShadowFilter"] = L"2";
+        kv[L"Display.fSpecualrStartMax"] = L"50";
+        kv[L"Water.iWaterMult"] = L"3";
+        kv[L"Decals.iMaxDecalsPerFrame"] = L"10";
+        kv[L"Advanced.TextureSize"] = L"Large";
+        kv[L"Advanced.TreeFade"] = L"85";
+        kv[L"Advanced.ActorFade"] = L"85";
+        kv[L"Advanced.ItemFade"] = L"85";
+        kv[L"Advanced.ObjectFade"] = L"85";
+    }
+    else // Ultra High
+    {
+        kv[L"Display.iMultiSample"] = L"8";
+        kv[L"Display.bShadowsOnGrass"] = L"1";
+        kv[L"Display.bDoCanopyShadowPass"] = L"1";
+        kv[L"Display.iShadowFilter"] = L"3";
+        kv[L"Display.fSpecualrStartMax"] = L"65";
+        kv[L"Water.iWaterMult"] = L"3";
+        kv[L"Display.bDynamicWindowReflections"] = L"1";
+        kv[L"Decals.iMaxDecalsPerFrame"] = L"10";
+        kv[L"Advanced.TextureSize"] = L"Large";
+        kv[L"Advanced.TreeFade"] = L"100";
+        kv[L"Advanced.ActorFade"] = L"100";
+        kv[L"Advanced.ItemFade"] = L"100";
+        kv[L"Advanced.ObjectFade"] = L"100";
+    }
+
+    return kv;
+}
+
 static void ApplyPresetByName(const wchar_t* presetName)
 {
+    std::map<std::wstring, std::wstring> kv = BuildVideoPresetState(presetName);
+
     const std::wstring presetPath = PresetPathFromName(presetName);
     DWORD attr = GetFileAttributesW(presetPath.c_str());
-    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY))
-        return;
+    if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY))
+    {
+        auto fileKv = FilterPresetForApply(LoadPresetFile(presetPath));
+        for (const auto& it : fileKv) kv[it.first] = it.second;
+    }
 
-    auto kv = FilterPresetForApply(LoadPresetFile(presetPath));
     ApplyStateToControls(kv, false);
-    gPendingPresetPath = presetPath;
+    gPendingPresetPath.clear();
 }
 
 // ----------------------------------------------------------------------------
@@ -2290,32 +2443,8 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         if (id == IDC_DEFAULTS && code == BN_CLICKED)
         {
-            const std::wstring lowPath = PresetPathFromName(L"Low");
-            DWORD attr = GetFileAttributesW(lowPath.c_str());
-            if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY))
-            {
-                auto kv = FilterPresetForApply(LoadPresetFile(lowPath));
-                ApplyStateToControls(kv, false);
-                gPendingPresetPath = lowPath;
-
-                if (gPresetCombo)
-                {
-                    const int count = (int)SendMessageW(gPresetCombo, CB_GETCOUNT, 0, 0);
-                    for (int i = 0; i < count; i++)
-                    {
-                        wchar_t buf[260] = {};
-                        SendMessageW(gPresetCombo, CB_GETLBTEXT, i, (LPARAM)buf);
-                        if (_wcsicmp(buf, L"Low") == 0)
-                        {
-                            SendMessageW(gPresetCombo, CB_SETCURSEL, i, 0);
-                            break;
-                        }
-                    }
-                }
-                return 0;
-            }
-
             ResetINIFile();
+            gPendingPresetPath.clear();
             LoadFromINI();
             return 0;
         }
@@ -2338,18 +2467,6 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
         if (id == IDC_APPLY && code == BN_CLICKED)
         {
-            if (!gPendingPresetPath.empty())
-            {
-                auto raw = LoadPresetFile(gPendingPresetPath);
-                if (!raw.empty())
-                {
-                    auto kv = FilterPresetForApply(raw);
-                    if (!kv.empty())
-                        ApplyStateToControls(kv, false);
-                }
-                gPendingPresetPath.clear();
-            }
-
             ApplyControlsToINI();
             LoadFromINI();
             DestroyWindow(hwnd);
