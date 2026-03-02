@@ -126,6 +126,12 @@ static HWND gTreeFadeVal = nullptr;
 static HWND gActorFadeVal = nullptr;
 static HWND gItemFadeVal = nullptr;
 static HWND gObjectFadeVal = nullptr;
+static HWND gJumpDelayTrack = nullptr;
+static HWND gJumpDelayVal = nullptr;
+static HWND gLodTreeBiasTrack = nullptr;
+static HWND gLodTreeBiasVal = nullptr;
+static HWND gLodLocalTreeBiasTrack = nullptr;
+static HWND gLodLocalTreeBiasVal = nullptr;
 
 static HWND gMasterVolTrack = nullptr;
 static HWND gEffectsVolTrack = nullptr;
@@ -201,6 +207,9 @@ static const int IDC_ITEMFADE = 1403;
 static const int IDC_OBJECTFADE = 1404;
 static const int IDC_UGRID_DISTANT_COUNT = 1405;
 static const int IDC_UGRID_DISTANT_TREE_RANGE = 1406;
+static const int IDC_JUMP_DELAY = 1407;
+static const int IDC_LOD_TREE_BIAS = 1408;
+static const int IDC_LOCAL_TREE_BIAS = 1409;
 
 static const int IDC_MASTERVOL = 1501;
 static const int IDC_EFFECTSVOL = 1502;
@@ -374,6 +383,13 @@ static void SetTextInt(HWND h, int v)
     wchar_t b[32] = {};
     wsprintfW(b, L"%d", v);
     SetWindowTextW(h, b);
+}
+
+static void SetTextFloat(HWND h, double v, int decimals = 3)
+{
+    if (!h) return;
+    std::wstring text = FloatToWString(v, decimals);
+    SetWindowTextW(h, text.c_str());
 }
 
 static int GetTrackPos(HWND h, int fallback)
@@ -699,6 +715,9 @@ static bool IsManagedKey(const std::wstring& fullKey)
         L"BlurShader.bUseBlurShader",
         L"Water.bUseWaterHiRes",
         L"Display.bActorSelfShadowing",
+        L"Controls.fJumpAnimDelay",
+        L"SpeedTree.fLODTreeMipMapLODBias",
+        L"SpeedTree.fLocalTreeMipMapLODBias",
         L"MAIN.bEnableBorderRegion",
         L"Display.bAllowScreenShot",
         L"Messages.iFileLogging",
@@ -903,6 +922,25 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         if (n < 0) n = 0;
         if (n > 100) n = 100;
         outValue = std::to_wstring(n);
+        return true;
+    }
+
+    if (_wcsicmp(fullKey.c_str(), L"Controls.fJumpAnimDelay") == 0)
+    {
+        double f = _wtof(v.c_str());
+        if (f < 0.0) f = 0.0;
+        if (f > 1.0) f = 1.0;
+        outValue = FloatToWString(f, 4);
+        return true;
+    }
+
+    if (_wcsicmp(fullKey.c_str(), L"SpeedTree.fLODTreeMipMapLODBias") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"SpeedTree.fLocalTreeMipMapLODBias") == 0)
+    {
+        double f = _wtof(v.c_str());
+        if (f < -2.0) f = -2.0;
+        if (f > 2.0) f = 2.0;
+        outValue = FloatToWString(f, 4);
         return true;
     }
 
@@ -1113,6 +1151,24 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
     SendMessageW(gWaterHiResCheck, BM_SETCHECK, (_wtoi(get(L"Water.bUseWaterHiRes", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gActorSelfShadowingCheck, BM_SETCHECK, (_wtoi(get(L"Display.bActorSelfShadowing", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
+    int jumpDelayTicks = (int)(_wtof(get(L"Controls.fJumpAnimDelay", L"0.2500").c_str()) * 1000.0);
+    if (jumpDelayTicks < 0) jumpDelayTicks = 0;
+    if (jumpDelayTicks > 1000) jumpDelayTicks = 1000;
+    SetTrackPos(gJumpDelayTrack, jumpDelayTicks);
+    SetTextFloat(gJumpDelayVal, jumpDelayTicks / 1000.0, 3);
+
+    int treeBiasTicks = (int)((_wtof(get(L"SpeedTree.fLODTreeMipMapLODBias", L"-0.5000").c_str()) + 2.0) * 1000.0);
+    if (treeBiasTicks < 0) treeBiasTicks = 0;
+    if (treeBiasTicks > 4000) treeBiasTicks = 4000;
+    SetTrackPos(gLodTreeBiasTrack, treeBiasTicks);
+    SetTextFloat(gLodTreeBiasVal, (treeBiasTicks / 1000.0) - 2.0, 3);
+
+    int localBiasTicks = (int)((_wtof(get(L"SpeedTree.fLocalTreeMipMapLODBias", L"0.0000").c_str()) + 2.0) * 1000.0);
+    if (localBiasTicks < 0) localBiasTicks = 0;
+    if (localBiasTicks > 4000) localBiasTicks = 4000;
+    SetTrackPos(gLodLocalTreeBiasTrack, localBiasTicks);
+    SetTextFloat(gLodLocalTreeBiasVal, (localBiasTicks / 1000.0) - 2.0, 3);
+
     int ber = _wtoi(get(L"MAIN.bEnableBorderRegion", L"1").c_str());
     SendMessageW(gDisableBorderRegionsCheck, BM_SETCHECK, (ber == 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
@@ -1212,6 +1268,9 @@ static void ApplyControlsToINI()
     WriteINIInt(L"BlurShader", L"bUseBlurShader", (SendMessageW(gUseBlurShaderCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
     WriteINIInt(L"Water", L"bUseWaterHiRes", (SendMessageW(gWaterHiResCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
     WriteINIInt(L"Display", L"bActorSelfShadowing", (SendMessageW(gActorSelfShadowingCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
+    WriteINIString(L"Controls", L"fJumpAnimDelay", FloatToWString(GetTrackPos(gJumpDelayTrack, 250) / 1000.0, 4));
+    WriteINIString(L"SpeedTree", L"fLODTreeMipMapLODBias", FloatToWString((GetTrackPos(gLodTreeBiasTrack, 1500) / 1000.0) - 2.0, 4));
+    WriteINIString(L"SpeedTree", L"fLocalTreeMipMapLODBias", FloatToWString((GetTrackPos(gLodLocalTreeBiasTrack, 2000) / 1000.0) - 2.0, 4));
 
     WriteINIInt(L"MAIN", L"bEnableBorderRegion",
         (SendMessageW(gDisableBorderRegionsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 0 : 1);
@@ -1305,6 +1364,9 @@ static std::map<std::wstring, std::wstring> CaptureCurrentState()
     kv[L"BlurShader.bUseBlurShader"] = (SendMessageW(gUseBlurShaderCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
     kv[L"Water.bUseWaterHiRes"] = (SendMessageW(gWaterHiResCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
     kv[L"Display.bActorSelfShadowing"] = (SendMessageW(gActorSelfShadowingCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"Controls.fJumpAnimDelay"] = FloatToWString(GetTrackPos(gJumpDelayTrack, 250) / 1000.0, 4);
+    kv[L"SpeedTree.fLODTreeMipMapLODBias"] = FloatToWString((GetTrackPos(gLodTreeBiasTrack, 1500) / 1000.0) - 2.0, 4);
+    kv[L"SpeedTree.fLocalTreeMipMapLODBias"] = FloatToWString((GetTrackPos(gLodLocalTreeBiasTrack, 2000) / 1000.0) - 2.0, 4);
 
     kv[L"MAIN.bEnableBorderRegion"] = (SendMessageW(gDisableBorderRegionsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"0" : L"1";
 
@@ -1561,6 +1623,24 @@ static void LoadFromINI()
     SendMessageW(gUseBlurShaderCheck, BM_SETCHECK, GetINIInt(L"BlurShader", L"bUseBlurShader", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gWaterHiResCheck, BM_SETCHECK, GetINIInt(L"Water", L"bUseWaterHiRes", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gActorSelfShadowingCheck, BM_SETCHECK, GetINIInt(L"Display", L"bActorSelfShadowing", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    int jumpDelayTicks = (int)(_wtof(GetINIString(L"Controls", L"fJumpAnimDelay", L"0.2500").c_str()) * 1000.0);
+    if (jumpDelayTicks < 0) jumpDelayTicks = 0;
+    if (jumpDelayTicks > 1000) jumpDelayTicks = 1000;
+    SetTrackPos(gJumpDelayTrack, jumpDelayTicks);
+    SetTextFloat(gJumpDelayVal, jumpDelayTicks / 1000.0, 3);
+
+    int treeBiasTicks = (int)((_wtof(GetINIString(L"SpeedTree", L"fLODTreeMipMapLODBias", L"-0.5000").c_str()) + 2.0) * 1000.0);
+    if (treeBiasTicks < 0) treeBiasTicks = 0;
+    if (treeBiasTicks > 4000) treeBiasTicks = 4000;
+    SetTrackPos(gLodTreeBiasTrack, treeBiasTicks);
+    SetTextFloat(gLodTreeBiasVal, (treeBiasTicks / 1000.0) - 2.0, 3);
+
+    int localBiasTicks = (int)((_wtof(GetINIString(L"SpeedTree", L"fLocalTreeMipMapLODBias", L"0.0000").c_str()) + 2.0) * 1000.0);
+    if (localBiasTicks < 0) localBiasTicks = 0;
+    if (localBiasTicks > 4000) localBiasTicks = 4000;
+    SetTrackPos(gLodLocalTreeBiasTrack, localBiasTicks);
+    SetTextFloat(gLodLocalTreeBiasVal, (localBiasTicks / 1000.0) - 2.0, 3);
 
     std::wstring rw = GetINIString(L"Display", L"iSize W", L"");
     std::wstring rh = GetINIString(L"Display", L"iSize H", L"");
@@ -1895,7 +1975,7 @@ static void BuildUI(HWND hwnd)
 
     // ADVANCED
     {
-        const int gbH = sx(210);
+        const int gbH = sx(340);
         CreateGroupBox(gContent, L"Advanced", pad, y, contentW, gbH);
 
         int ry = y + sx(24);
@@ -1914,6 +1994,24 @@ static void BuildUI(HWND hwnd)
         RowSlider(ry, L"Item Fade", gItemFadeTrack, IDC_ITEMFADE, gItemFadeVal, L"50");
         ry += rowH + rowGap;
         RowSlider(ry, L"Object Fade", gObjectFadeTrack, IDC_OBJECTFADE, gObjectFadeVal, L"50");
+
+        ry += rowH + rowGap + sx(4);
+        CreateLabel(gContent, L"Jump Delay", LxLabel, AlignLabelY(ry), labelW, labelH);
+        gJumpDelayTrack = CreateTrackBar(gContent, IDC_JUMP_DELAY, LxCtrl, ry - sx(2), sliderW, sx(24), 0, 1000);
+        gJumpDelayVal = CreateValueLabel(gContent, L"0.250", LxCtrl + sliderW + sliderValGap, AlignLabelY(ry), sliderValW + sx(20), labelH);
+        SetTrackPos(gJumpDelayTrack, 250);
+
+        ry += rowH + rowGap;
+        CreateLabel(gContent, L"LOD Tree Bias", LxLabel, AlignLabelY(ry), labelW, labelH);
+        gLodTreeBiasTrack = CreateTrackBar(gContent, IDC_LOD_TREE_BIAS, LxCtrl, ry - sx(2), sliderW, sx(24), 0, 4000);
+        gLodTreeBiasVal = CreateValueLabel(gContent, L"-0.500", LxCtrl + sliderW + sliderValGap, AlignLabelY(ry), sliderValW + sx(20), labelH);
+        SetTrackPos(gLodTreeBiasTrack, 1500);
+
+        ry += rowH + rowGap;
+        CreateLabel(gContent, L"LOD Local Bias", LxLabel, AlignLabelY(ry), labelW, labelH);
+        gLodLocalTreeBiasTrack = CreateTrackBar(gContent, IDC_LOCAL_TREE_BIAS, LxCtrl, ry - sx(2), sliderW, sx(24), 0, 4000);
+        gLodLocalTreeBiasVal = CreateValueLabel(gContent, L"0.000", LxCtrl + sliderW + sliderValGap, AlignLabelY(ry), sliderValW + sx(20), labelH);
+        SetTrackPos(gLodLocalTreeBiasTrack, 2000);
 
         y += gbH + sx(12);
     }
@@ -2032,6 +2130,10 @@ static void SyncValueLabelsFromTracks()
     if (gMusicVolTrack)  SetTextInt(gMusicVolVal, GetTrackPos(gMusicVolTrack, 70));
 
     if (gMouseSensTrack) SetTextInt(gMouseSensVal, GetTrackPos(gMouseSensTrack, 50));
+
+    if (gJumpDelayTrack) SetTextFloat(gJumpDelayVal, GetTrackPos(gJumpDelayTrack, 250) / 1000.0, 3);
+    if (gLodTreeBiasTrack) SetTextFloat(gLodTreeBiasVal, (GetTrackPos(gLodTreeBiasTrack, 1500) / 1000.0) - 2.0, 3);
+    if (gLodLocalTreeBiasTrack) SetTextFloat(gLodLocalTreeBiasVal, (GetTrackPos(gLodLocalTreeBiasTrack, 2000) / 1000.0) - 2.0, 3);
 }
 
 // ----------------------------------------------------------------------------
