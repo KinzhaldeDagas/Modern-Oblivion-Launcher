@@ -1,35 +1,38 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <shlwapi.h>
-#include <shlobj.h>       // <-- Add this
+#include <shlobj.h>
 #include "DataFilesWindow.h"
-#include <vector>
-#include <unordered_map>
-#include <string>
-#include <fstream>
+
 #include <algorithm>
-#include <winreg.h>
-
-
+#include <fstream>
+#include <string>
+#include <vector>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "msimg32.lib")
+#pragma comment(lib, "shell32.lib")
 
-#define IDC_PLUGIN_LIST 1001
-#define IDC_OK_BUTTON 1002
-#define IDC_CANCEL_BUTTON 1003
+#define IDC_PLUGIN_LIST      1001
+#define IDC_OK_BUTTON        1002
+#define IDC_CANCEL_BUTTON    1003
+#define IDC_RESET_BUTTON     1004
+#define IDC_DESCRIPTION_EDIT 1005
+
+namespace {
 
 static std::vector<std::wstring> pluginFiles;
 static std::vector<std::wstring> activePlugins;
-static HWND hPluginList;
+
+static HWND hPluginList = NULL;
+static HWND hPluginName = NULL;
+static HWND hCreatedBy = NULL;
+static HWND hDescription = NULL;
+static HWND hCreatedOn = NULL;
+static HWND hModifiedOn = NULL;
+
 static std::wstring dataPath;
-
-static std::unordered_map<HWND, bool> g_btnHot;
-
 static HFONT g_hCommonFont = NULL;
-static std::wstring g_fontFaceName;
-static std::wstring g_fontFilePath;
 
 static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     if (a.empty()) return b;
@@ -38,328 +41,215 @@ static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     return a + L"\\" + b;
 }
 
-static std::wstring GetExeDir() {
-    wchar_t buf[MAX_PATH] = {};
-    GetModuleFileNameW(NULL, buf, MAX_PATH);
-    PathRemoveFileSpecW(buf);
+static bool EqualsNoCase(const std::wstring& a, const std::wstring& b) {
+    return _wcsicmp(a.c_str(), b.c_str()) == 0;
+}
+
+static bool IsPluginFile(const std::wstring& fileName) {
+    const wchar_t* ext = PathFindExtensionW(fileName.c_str());
+    if (!ext || !*ext) return false;
+    return _wcsicmp(ext, L".esm") == 0 || _wcsicmp(ext, L".esp") == 0;
+}
+
+static bool IsActivePlugin(const std::wstring& fileName) {
+    return std::find_if(activePlugins.begin(), activePlugins.end(),
+        [&](const std::wstring& active) { return EqualsNoCase(active, fileName); }) != activePlugins.end();
+}
+
+static std::wstring FormatDate(const FILETIME& ft) {
+    FILETIME localFt = {};
+    SYSTEMTIME st = {};
+    if (!FileTimeToLocalFileTime(&ft, &localFt) || !FileTimeToSystemTime(&localFt, &st)) {
+        return L"Unknown";
+    }
+
+    wchar_t buf[64] = {};
+    swprintf_s(buf, L"%02d/%02d/%04d", st.wMonth, st.wDay, st.wYear);
     return buf;
 }
 
-static std::wstring ParentDir(std::wstring p) {
-    if (p.empty()) return p;
-    wchar_t tmp[MAX_PATH] = {};
-    wcsncpy_s(tmp, p.c_str(), _TRUNCATE);
-    PathRemoveFileSpecW(tmp);
-    return tmp;
+static void SetCommonFont(HWND hwnd) {
+    if (hwnd && g_hCommonFont) {
+        SendMessageW(hwnd, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
+    }
 }
 
-static std::wstring FindFontFileNearSolutionRoot() {
-    const std::wstring fontName = L"oblivionfont.ttf";
-    const std::wstring slnName = L"Modern Oblivion Launcher.sln";
-
-    std::vector<std::wstring> roots;
-    {
-        wchar_t cwd[MAX_PATH] = {};
-        GetCurrentDirectoryW(MAX_PATH, cwd);
-        roots.push_back(cwd);
-    }
-    roots.push_back(GetExeDir());
-
-    for (const auto& start : roots) {
-        std::wstring dir = start;
-        for (int i = 0; i < 6 && !dir.empty(); i++) {
-            const std::wstring fontPath = JoinPath(dir, fontName);
-            if (PathFileExistsW(fontPath.c_str())) return fontPath;
-
-            const std::wstring slnPath = JoinPath(dir, slnName);
-            if (PathFileExistsW(slnPath.c_str())) {
-                const std::wstring slnFont = JoinPath(dir, fontName);
-                if (PathFileExistsW(slnFont.c_str())) return slnFont;
-            }
-            dir = ParentDir(dir);
-        }
-    }
-    return L"";
-}
-
-static uint16_t ReadU16BE(const uint8_t* p) { return (uint16_t)((p[0] << 8) | p[1]); }
-static uint32_t ReadU32BE(const uint8_t* p) { return (uint32_t)((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]); }
-
-static std::wstring ExtractFamilyNameFromTTF(const std::wstring& ttfPath) {
-    std::ifstream f(ttfPath, std::ios::binary);
-    if (!f) return L"";
-    f.seekg(0, std::ios::end);
-    const std::streamoff sz = f.tellg();
-    if (sz <= 0 || sz > (50ll * 1024ll * 1024ll)) return L"";
-    f.seekg(0, std::ios::beg);
-    std::vector<uint8_t> bytes((size_t)sz);
-    f.read((char*)bytes.data(), sz);
-    if (!f || bytes.size() < 12) return L"";
-
-    const uint16_t numTables = ReadU16BE(&bytes[4]);
-    if (bytes.size() < 12ull + (size_t)numTables * 16ull) return L"";
-
-    uint32_t nameOffset = 0, nameLength = 0;
-    for (uint16_t i = 0; i < numTables; i++) {
-        const size_t off = 12ull + (size_t)i * 16ull;
-        const uint32_t tag = ReadU32BE(&bytes[off + 0]);
-        const uint32_t to = ReadU32BE(&bytes[off + 8]);
-        const uint32_t tl = ReadU32BE(&bytes[off + 12]);
-        if (tag == 0x6E616D65u) { nameOffset = to; nameLength = tl; break; } // 'name'
-    }
-    if (!nameOffset || nameOffset + nameLength > bytes.size() || nameLength < 6) return L"";
-
-    const uint8_t* nt = bytes.data() + nameOffset;
-    const uint16_t count = ReadU16BE(nt + 2);
-    const uint16_t stringOffset = ReadU16BE(nt + 4);
-    if (6ull + (size_t)count * 12ull > nameLength) return L"";
-
-    auto pick = [&](uint16_t wantedNameId) -> std::wstring {
-        for (uint16_t i = 0; i < count; i++) {
-            const uint8_t* r = nt + 6 + (size_t)i * 12;
-            const uint16_t platformID = ReadU16BE(r + 0);
-            const uint16_t encodingID = ReadU16BE(r + 2);
-            const uint16_t languageID = ReadU16BE(r + 4);
-            const uint16_t nameID = ReadU16BE(r + 6);
-            const uint16_t len = ReadU16BE(r + 8);
-            const uint16_t roff = ReadU16BE(r + 10);
-
-            if (platformID != 3) continue;
-            if (!(encodingID == 0 || encodingID == 1 || encodingID == 10)) continue;
-            if (languageID != 0x0409) continue;
-            if (nameID != wantedNameId) continue;
-
-            const size_t sbase = nameOffset + (size_t)stringOffset + (size_t)roff;
-            if (sbase + len > bytes.size()) continue;
-
-            std::wstring out;
-            out.reserve(len / 2);
-            for (size_t j = 0; j + 1 < len; j += 2) {
-                const uint8_t b0 = bytes[sbase + j];
-                const uint8_t b1 = bytes[sbase + j + 1];
-                const wchar_t wc = (wchar_t)((b0 << 8) | b1);
-                if (wc) out.push_back(wc);
-            }
-            return out;
-        }
+static std::wstring GetPluginsTxtPath() {
+    wchar_t appData[MAX_PATH] = {};
+    if (FAILED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appData))) {
         return L"";
-        };
-
-    std::wstring fam = pick(1);
-    if (!fam.empty()) return fam;
-    return pick(4);
-}
-
-static HFONT LoadOblivionFontFromFile(float pt, bool bold) {
-    g_fontFilePath = FindFontFileNearSolutionRoot();
-    if (g_fontFilePath.empty()) return NULL;
-
-    g_fontFaceName = ExtractFamilyNameFromTTF(g_fontFilePath);
-    if (g_fontFaceName.empty()) g_fontFaceName = L"Oblivion";
-
-    // (disabled) AddFontResourceExW(g_fontFilePath.c_str(), FR_PRIVATE, NULL);
-    HDC hdc = GetDC(NULL);
-    const int logpx = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(NULL, hdc);
-    const int height = -MulDiv((int)(pt + 0.5f), logpx, 72);
-
-    LOGFONTW lf = {};
-    lf.lfHeight = height;
-    lf.lfWeight = bold ? FW_BOLD : FW_NORMAL;
-    wcsncpy_s(lf.lfFaceName, g_fontFaceName.c_str(), _TRUNCATE);
-    return CreateFontIndirectW(&lf);
-}
-
-static LRESULT CALLBACK HoverBtnSubProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam,
-    UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
-    switch (msg) {
-    case WM_NCDESTROY:
-        g_btnHot.erase(hWnd);
-        RemoveWindowSubclass(hWnd, HoverBtnSubProc, uIdSubclass);
-        break;
-    case WM_MOUSEMOVE: {
-        if (!g_btnHot[hWnd]) {
-            g_btnHot[hWnd] = true;
-            TRACKMOUSEEVENT tme = { sizeof(tme) };
-            tme.dwFlags = TME_LEAVE;
-            tme.hwndTrack = hWnd;
-            TrackMouseEvent(&tme);
-            InvalidateRect(hWnd, nullptr, TRUE);
-        }
-        break;
     }
-    case WM_MOUSELEAVE:
-        if (g_btnHot[hWnd]) {
-            g_btnHot[hWnd] = false;
-            InvalidateRect(hWnd, nullptr, TRUE);
-        }
-        break;
-    }
-    return DefSubclassProc(hWnd, msg, wParam, lParam);
+
+    const std::wstring oblivionDir = JoinPath(appData, L"Oblivion");
+    SHCreateDirectoryExW(NULL, oblivionDir.c_str(), NULL);
+    return JoinPath(oblivionDir, L"Plugins.txt");
 }
 
-static void AlphaFillRect(HDC dc, const RECT& rc, COLORREF rgb, BYTE alpha) {
-    const int w = rc.right - rc.left;
-    const int h = rc.bottom - rc.top;
-    if (w <= 0 || h <= 0) return;
+static bool GetPluginFileInfo(const std::wstring& pluginName, WIN32_FILE_ATTRIBUTE_DATA* outFileInfo) {
+    if (!outFileInfo) return false;
+    const std::wstring pluginPath = JoinPath(dataPath, pluginName);
+    return GetFileAttributesExW(pluginPath.c_str(), GetFileExInfoStandard, outFileInfo) == TRUE;
+}
 
-    BITMAPINFO bi = {};
-    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth = 1;
-    bi.bmiHeader.biHeight = 1;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = nullptr;
-    HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!bmp || !bits) {
-        if (bmp) DeleteObject(bmp);
+static void UpdatePluginDetails(int selectedIndex) {
+    if (selectedIndex < 0 || selectedIndex >= (int)pluginFiles.size()) {
+        SetWindowTextW(hPluginName, L"");
+        SetWindowTextW(hCreatedBy, L"Created by: Unknown");
+        SetWindowTextW(hDescription, L"");
+        SetWindowTextW(hCreatedOn, L"Created on: Unknown");
+        SetWindowTextW(hModifiedOn, L"Last modified: Unknown");
         return;
     }
 
-    // BGRA
-    const BYTE r = GetRValue(rgb);
-    const BYTE g = GetGValue(rgb);
-    const BYTE b = GetBValue(rgb);
-    ((BYTE*)bits)[0] = b;
-    ((BYTE*)bits)[1] = g;
-    ((BYTE*)bits)[2] = r;
-    ((BYTE*)bits)[3] = alpha;
+    const std::wstring& plugin = pluginFiles[(size_t)selectedIndex];
+    SetWindowTextW(hPluginName, plugin.c_str());
+    SetWindowTextW(hCreatedBy, L"Created by: Unknown");
 
-    HDC mem = CreateCompatibleDC(dc);
-    HGDIOBJ old = SelectObject(mem, bmp);
-
-    BLENDFUNCTION bf = {};
-    bf.BlendOp = AC_SRC_OVER;
-    bf.SourceConstantAlpha = 255;
-    bf.AlphaFormat = AC_SRC_ALPHA;
-
-    AlphaBlend(dc, rc.left, rc.top, w, h, mem, 0, 0, 1, 1, bf);
-
-    SelectObject(mem, old);
-    DeleteDC(mem);
-    DeleteObject(bmp);
-}
-
-static void DrawHoverButton(const DRAWITEMSTRUCT* ds) {
-    HDC dc = ds->hDC;
-    RECT rc = ds->rcItem;
-
-    const bool hot = (g_btnHot.find(ds->hwndItem) != g_btnHot.end()) ? g_btnHot[ds->hwndItem] : false;
-    const bool down = (ds->itemState & ODS_SELECTED) != 0;
-
-    FillRect(dc, &rc, (HBRUSH)(COLOR_BTNFACE + 1));
-
-    // Hover background only (88% opacity). Also show while pressed.
-    if (hot || down) {
-        const BYTE a = down ? 200 : 224; // 200/255 ~ 78%, 224/255 ~ 88%
-        AlphaFillRect(dc, rc, GetSysColor(COLOR_HIGHLIGHT), a);
-        FrameRect(dc, &rc, GetSysColorBrush(COLOR_HIGHLIGHT));
+    WIN32_FILE_ATTRIBUTE_DATA fileInfo = {};
+    std::wstring createdOn = L"Created on: Unknown";
+    std::wstring modifiedOn = L"Last modified: Unknown";
+    if (GetPluginFileInfo(plugin, &fileInfo)) {
+        createdOn = L"Created on: " + FormatDate(fileInfo.ftCreationTime);
+        modifiedOn = L"Last modified: " + FormatDate(fileInfo.ftLastWriteTime);
     }
 
-    wchar_t text[128] = {};
-    GetWindowTextW(ds->hwndItem, text, 128);
+    SetWindowTextW(hCreatedOn, createdOn.c_str());
+    SetWindowTextW(hModifiedOn, modifiedOn.c_str());
 
-    HFONT hFont = (HFONT)SendMessage(ds->hwndItem, WM_GETFONT, 0, 0);
-    if (!hFont) hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-    HFONT oldFont = (HFONT)SelectObject(dc, hFont);
+    const wchar_t* ext = PathFindExtensionW(plugin.c_str());
+    const bool isMaster = ext && _wcsicmp(ext, L".esm") == 0;
 
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+    std::wstring desc;
+    desc += L"\r\n";
+    desc += L"No description data available for this plugin.\r\n\r\n";
+    desc += L"Master Files Required:\r\n";
+    desc += isMaster ? L"(none)" : L"Oblivion.esm";
+    SetWindowTextW(hDescription, desc.c_str());
+}
 
-    RECT tr = rc;
-    if (down) OffsetRect(&tr, 1, 1);
+static void SelectFirstPlugin() {
+    if (!hPluginList || pluginFiles.empty()) {
+        UpdatePluginDetails(-1);
+        return;
+    }
 
-    DrawTextW(dc, text, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    ListView_SetItemState(hPluginList, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_EnsureVisible(hPluginList, 0, FALSE);
+    UpdatePluginDetails(0);
+}
 
-    SelectObject(dc, oldFont);
+static void ResetToDefaults() {
+    if (!hPluginList) return;
 
-    if (ds->itemState & ODS_FOCUS) {
-        RECT fr = rc;
-        InflateRect(&fr, -3, -3);
-        DrawFocusRect(dc, &fr);
+    const int count = ListView_GetItemCount(hPluginList);
+    for (int i = 0; i < count; ++i) {
+        ListView_SetCheckState(hPluginList, i, FALSE);
+    }
+
+    for (int i = 0; i < count; ++i) {
+        wchar_t buffer[MAX_PATH] = {};
+        ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
+        if (_wcsicmp(buffer, L"Oblivion.esm") == 0) {
+            ListView_SetCheckState(hPluginList, i, TRUE);
+            break;
+        }
     }
 }
 
+} // namespace
 
 std::wstring GetOblivionDataPath() {
     HKEY hKey;
-    wchar_t path[MAX_PATH];
+    wchar_t path[MAX_PATH] = {};
     DWORD size = sizeof(path);
 
-    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Bethesda Softworks\\Oblivion", 0, KEY_READ | KEY_WOW64_32KEY, &hKey) == ERROR_SUCCESS) {
-        if (RegQueryValueEx(hKey, L"Installed Path", NULL, NULL, (LPBYTE)path, &size) == ERROR_SUCCESS) {
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Bethesda Softworks\\Oblivion", 0, KEY_READ | KEY_WOW64_32KEY, &hKey) == ERROR_SUCCESS) {
+        if (RegQueryValueExW(hKey, L"Installed Path", NULL, NULL, (LPBYTE)path, &size) == ERROR_SUCCESS) {
             RegCloseKey(hKey);
             return std::wstring(path) + L"Data\\";
         }
         RegCloseKey(hKey);
     }
+
     return L"";
 }
 
 void LoadPlugins() {
     pluginFiles.clear();
 
-    WIN32_FIND_DATA findData;
-    HANDLE hFind = FindFirstFile((dataPath + L"*.es?").c_str(), &findData);
-
+    WIN32_FIND_DATAW findData = {};
+    HANDLE hFind = FindFirstFileW((dataPath + L"*").c_str(), &findData);
     if (hFind != INVALID_HANDLE_VALUE) {
         do {
-            pluginFiles.push_back(findData.cFileName);
-        } while (FindNextFile(hFind, &findData));
+            if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+                const std::wstring fileName = findData.cFileName;
+                if (IsPluginFile(fileName)) {
+                    pluginFiles.push_back(fileName);
+                }
+            }
+        } while (FindNextFileW(hFind, &findData));
         FindClose(hFind);
     }
+
+    std::sort(pluginFiles.begin(), pluginFiles.end(),
+        [](const std::wstring& a, const std::wstring& b) { return _wcsicmp(a.c_str(), b.c_str()) < 0; });
+    pluginFiles.erase(std::unique(pluginFiles.begin(), pluginFiles.end(),
+        [](const std::wstring& a, const std::wstring& b) { return EqualsNoCase(a, b); }),
+        pluginFiles.end());
 }
 
 void LoadActivePlugins() {
     activePlugins.clear();
-    wchar_t appData[MAX_PATH];
-    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appData))) {
-        std::wstring pluginsTxt = std::wstring(appData) + L"\\Oblivion\\Plugins.txt";
-        std::wifstream inFile(pluginsTxt);
-        if (inFile) {
-            std::wstring line;
-            while (std::getline(inFile, line)) {
-                line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
-                line.erase(std::remove(line.begin(), line.end(), '\n'), line.end());
-                if (!line.empty()) {
-                    activePlugins.push_back(line);
-                }
-            }
+
+    const std::wstring pluginsTxt = GetPluginsTxtPath();
+    if (pluginsTxt.empty()) return;
+
+    std::wifstream inFile(pluginsTxt);
+    if (!inFile) return;
+
+    std::wstring line;
+    while (std::getline(inFile, line)) {
+        line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+        line.erase(std::remove(line.begin(), line.end(), '\n'), line.end());
+        if (!line.empty()) {
+            activePlugins.push_back(line);
         }
     }
 }
 
 void SaveActivePlugins() {
-    wchar_t appData[MAX_PATH];
-    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appData))) {
-        std::wstring pluginsTxt = std::wstring(appData) + L"\\Oblivion\\Plugins.txt";
-        std::wofstream outFile(pluginsTxt, std::ios::trunc);
-        if (outFile) {
-            int count = ListView_GetItemCount(hPluginList);
-            for (int i = 0; i < count; ++i) {
-                if (ListView_GetCheckState(hPluginList, i)) {
-                    wchar_t buffer[MAX_PATH];
-                    ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
-                    outFile << buffer << std::endl;
-                }
-            }
+    const std::wstring pluginsTxt = GetPluginsTxtPath();
+    if (pluginsTxt.empty() || !hPluginList) return;
+
+    std::wofstream outFile(pluginsTxt, std::ios::trunc);
+    if (!outFile) {
+        MessageBoxW(NULL, L"Unable to write Plugins.txt", L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    const int count = ListView_GetItemCount(hPluginList);
+    for (int i = 0; i < count; ++i) {
+        if (ListView_GetCheckState(hPluginList, i)) {
+            wchar_t buffer[MAX_PATH] = {};
+            ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
+            outFile << buffer << std::endl;
         }
     }
 }
 
 void PopulatePluginList(HWND hwndList) {
+    if (!hwndList) return;
+
     ListView_DeleteAllItems(hwndList);
 
     for (size_t i = 0; i < pluginFiles.size(); ++i) {
-        LVITEM item = {};
+        LVITEMW item = {};
         item.mask = LVIF_TEXT;
         item.iItem = (int)i;
-        item.pszText = (LPWSTR)pluginFiles[i].c_str();
+        item.pszText = const_cast<LPWSTR>(pluginFiles[i].c_str());
         ListView_InsertItem(hwndList, &item);
 
-        if (std::find(activePlugins.begin(), activePlugins.end(), pluginFiles[i]) != activePlugins.end()) {
+        if (IsActivePlugin(pluginFiles[i])) {
             ListView_SetCheckState(hwndList, (int)i, TRUE);
         }
     }
@@ -372,49 +262,90 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         INITCOMMONCONTROLSEX icex = { sizeof(INITCOMMONCONTROLSEX), ICC_LISTVIEW_CLASSES };
         InitCommonControlsEx(&icex);
 
-        hPluginList = CreateWindowEx(WS_EX_CLIENTEDGE, WC_LISTVIEW, NULL,
+        g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+
+        HWND hDataFilesLabel = CreateWindowW(L"STATIC", L"Data Files:", WS_VISIBLE | WS_CHILD,
+            18, 18, 100, 22, hwnd, NULL, NULL, NULL);
+
+        HWND hLeftFrame = CreateWindowW(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_GROUPBOX,
+            18, 42, 348, 474, hwnd, NULL, NULL, NULL);
+
+        hPluginList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, NULL,
             WS_VISIBLE | WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER,
-            10, 10, 460, 400,
+            28, 56, 338, 434,
             hwnd, (HMENU)IDC_PLUGIN_LIST, NULL, NULL);
 
-        g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        if (!g_hCommonFont)
-            g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        hPluginName = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD,
+            378, 44, 288, 24, hwnd, NULL, NULL, NULL);
 
-        if (hPluginList)
-            SendMessage(hPluginList, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
+        hCreatedBy = CreateWindowW(L"STATIC", L"Created by: Unknown", WS_VISIBLE | WS_CHILD,
+            378, 70, 288, 24, hwnd, NULL, NULL, NULL);
 
-        ListView_SetExtendedListViewStyle(hPluginList, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+        hDescription = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_VISIBLE | WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,
+            378, 98, 288, 316,
+            hwnd, (HMENU)IDC_DESCRIPTION_EDIT, NULL, NULL);
 
-        LVCOLUMN col = { LVCF_WIDTH, 0, 440 };
-        ListView_InsertColumn(hPluginList, 0, &col);
+        hCreatedOn = CreateWindowW(L"STATIC", L"Created on: Unknown", WS_VISIBLE | WS_CHILD,
+            378, 426, 288, 24, hwnd, NULL, NULL, NULL);
 
-        HWND hOk = CreateWindow(L"BUTTON", L"OK", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            200, 420, 80, 30,
-            hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
+        hModifiedOn = CreateWindowW(L"STATIC", L"Last modified: Unknown", WS_VISIBLE | WS_CHILD,
+            378, 452, 288, 24, hwnd, NULL, NULL, NULL);
 
-        HWND hCancel = CreateWindow(L"BUTTON", L"Cancel", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            290, 420, 80, 30,
+        HWND hReset = CreateWindowW(L"BUTTON", L"Reset to Defaults", WS_VISIBLE | WS_CHILD,
+            18, 530, 288, 36,
+            hwnd, (HMENU)IDC_RESET_BUTTON, NULL, NULL);
+
+        HWND hCancel = CreateWindowW(L"BUTTON", L"Cancel", WS_VISIBLE | WS_CHILD,
+            372, 530, 136, 36,
             hwnd, (HMENU)IDC_CANCEL_BUTTON, NULL, NULL);
 
-        if (hOk) SendMessage(hOk, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
-        if (hCancel) SendMessage(hCancel, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
+        HWND hOk = CreateWindowW(L"BUTTON", L"OK", WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+            524, 530, 136, 36,
+            hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
 
-        if (hOk) SetWindowSubclass(hOk, HoverBtnSubProc, 1, 0);
-        if (hCancel) SetWindowSubclass(hCancel, HoverBtnSubProc, 1, 0);
+        if (!hDataFilesLabel || !hLeftFrame || !hPluginList || !hPluginName || !hCreatedBy ||
+            !hDescription || !hCreatedOn || !hModifiedOn || !hReset || !hCancel || !hOk) {
+            MessageBoxW(hwnd, L"Failed to create Data Files controls.", L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
+            DestroyWindow(hwnd);
+            return -1;
+        }
+
+        SetCommonFont(hDataFilesLabel);
+        SetCommonFont(hLeftFrame);
+        SetCommonFont(hPluginList);
+        SetCommonFont(hPluginName);
+        SetCommonFont(hCreatedBy);
+        SetCommonFont(hDescription);
+        SetCommonFont(hCreatedOn);
+        SetCommonFont(hModifiedOn);
+        SetCommonFont(hReset);
+        SetCommonFont(hCancel);
+        SetCommonFont(hOk);
+
+        ListView_SetExtendedListViewStyle(hPluginList, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+        LVCOLUMNW col = {};
+        col.mask = LVCF_WIDTH;
+        col.cx = 318;
+        ListView_InsertColumn(hPluginList, 0, &col);
 
         PopulatePluginList(hPluginList);
+        SelectFirstPlugin();
         return 0;
     }
-    case WM_DRAWITEM:
+
+    case WM_NOTIFY:
     {
-        DRAWITEMSTRUCT* ds = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-        if (ds && ds->CtlType == ODT_BUTTON) {
-            DrawHoverButton(ds);
-            return TRUE;
+        NMHDR* hdr = reinterpret_cast<NMHDR*>(lParam);
+        if (hdr && hdr->idFrom == IDC_PLUGIN_LIST && hdr->code == LVN_ITEMCHANGED) {
+            NMLISTVIEW* lv = reinterpret_cast<NMLISTVIEW*>(lParam);
+            if (lv && lv->iItem >= 0 && (lv->uNewState & LVIS_SELECTED) && !(lv->uOldState & LVIS_SELECTED)) {
+                UpdatePluginDetails(lv->iItem);
+            }
         }
         break;
     }
+
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDC_OK_BUTTON:
@@ -424,42 +355,63 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         case IDC_CANCEL_BUTTON:
             DestroyWindow(hwnd);
             return 0;
+        case IDC_RESET_BUTTON:
+            ResetToDefaults();
+            return 0;
         }
         break;
-    case WM_DESTROY:
-        if (g_hCommonFont && g_hCommonFont != (HFONT)GetStockObject(DEFAULT_GUI_FONT)) {
-            DeleteObject(g_hCommonFont);
-            g_hCommonFont = NULL;
-        }
-        if (!g_fontFilePath.empty()) {
-            g_fontFilePath.clear();
-            g_fontFaceName.clear();
-        }
+
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
         return 0;
+
+    case WM_NCDESTROY:
+        hPluginList = NULL;
+        hPluginName = NULL;
+        hCreatedBy = NULL;
+        hDescription = NULL;
+        hCreatedOn = NULL;
+        hModifiedOn = NULL;
+        g_hCommonFont = NULL;
+        break;
     }
-    return DefWindowProc(hwnd, uMsg, wParam, lParam);
+
+    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
 
 void OpenDataFilesWindow(HWND hParent) {
     dataPath = GetOblivionDataPath();
     if (dataPath.empty()) {
-        MessageBox(hParent, L"Oblivion install path not found.", L"Error", MB_ICONERROR);
+        MessageBoxW(hParent, L"Oblivion install path not found.", L"Error", MB_ICONERROR);
         return;
     }
 
     LoadPlugins();
     LoadActivePlugins();
 
-    WNDCLASS wc = {};
+    WNDCLASSW wc = {};
     wc.lpfnWndProc = DataFilesWndProc;
-    wc.hInstance = GetModuleHandle(NULL);
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
     wc.lpszClassName = L"DataFilesWindow";
-    RegisterClass(&wc);
 
-    HWND hwnd = CreateWindowEx(0, L"DataFilesWindow", L"Data Files",
-        WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME,
-        CW_USEDEFAULT, CW_USEDEFAULT, 500, 500,
-        hParent, NULL, GetModuleHandle(NULL), NULL);
+    ATOM cls = RegisterClassW(&wc);
+    if (cls == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        MessageBoxW(hParent, L"Unable to register Data Files window class.", L"Error", MB_ICONERROR);
+        return;
+    }
+
+    HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"DataFilesWindow", L"Oblivion: Data Files",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+        CW_USEDEFAULT, CW_USEDEFAULT, 702, 624,
+        hParent, NULL, GetModuleHandleW(NULL), NULL);
+
+    if (!hwnd) {
+        MessageBoxW(hParent, L"Unable to create Data Files window.", L"Error", MB_ICONERROR);
+        return;
+    }
 
     ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
 }
