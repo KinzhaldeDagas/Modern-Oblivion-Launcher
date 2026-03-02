@@ -71,6 +71,16 @@ static HWND gBtnApply = nullptr;
 static HWND gBtnCancel = nullptr;
 static HWND gBtnDefaults = nullptr;
 static HWND gBtnSavePreset = nullptr;
+static HWND gBtnPresetVeryLow = nullptr;
+static HWND gBtnPresetLow = nullptr;
+static HWND gBtnPresetMedium = nullptr;
+static HWND gBtnPresetHigh = nullptr;
+static HWND gBtnPresetUltra = nullptr;
+
+static HWND gAdapterCombo = nullptr;
+static HWND gWindowedRadio = nullptr;
+static HWND gFullscreenRadio = nullptr;
+static HWND gEffectsNoneRadio = nullptr;
 
 static HWND gResCombo = nullptr;
 static HWND gWinModeCombo = nullptr;
@@ -139,10 +149,18 @@ static const int IDC_APPLY = 1101;
 static const int IDC_CANCEL = 1102;
 static const int IDC_DEFAULTS = 1103;
 static const int IDC_SAVE_PRESET = 1104;
+static const int IDC_PRESET_VERYLOW = 1105;
+static const int IDC_PRESET_LOW = 1106;
+static const int IDC_PRESET_MEDIUM = 1107;
+static const int IDC_PRESET_HIGH = 1108;
+static const int IDC_PRESET_ULTRA = 1109;
 
 static const int IDC_RES_COMBO = 1200;
 static const int IDC_WINMODE_COMBO = 1201;
 static const int IDC_VSYNC = 1202;
+static const int IDC_MODE_WINDOWED = 1203;
+static const int IDC_MODE_FULLSCREEN = 1204;
+static const int IDC_EFFECTS_NONE = 1205;
 
 static const int IDC_HDR = 1300;
 static const int IDC_AA_COMBO = 1301;
@@ -957,7 +975,14 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
     }
 
     int fullScreen = _wtoi(get(L"Display.bFull Screen", L"1").c_str());
-    SetComboByData(gWinModeCombo, (fullScreen != 0) ? 0 : 1);
+    if (gFullscreenRadio && gWindowedRadio)
+    {
+        SendMessageW((fullScreen != 0) ? gFullscreenRadio : gWindowedRadio, BM_SETCHECK, BST_CHECKED, 0);
+    }
+    else
+    {
+        SetComboByData(gWinModeCombo, (fullScreen != 0) ? 0 : 1);
+    }
 
     SendMessageW(gVsyncCheck, BM_SETCHECK, (_wtoi(get(L"Display.iPresentInterval", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gHdrCheck, BM_SETCHECK, (_wtoi(get(L"Display.HDR", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -970,6 +995,12 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
     SendMessageW(gDistantTreesCheck, BM_SETCHECK, (_wtoi(get(L"Display.DistantTrees", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SendMessageW(gBloomCheck, BM_SETCHECK, (_wtoi(get(L"Display.bDoBloom", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    if (gEffectsNoneRadio)
+    {
+        const BOOL noneEffects = (SendMessageW(gBloomCheck, BM_GETCHECK, 0, 0) != BST_CHECKED)
+            && (SendMessageW(gHdrCheck, BM_GETCHECK, 0, 0) != BST_CHECKED);
+        SendMessageW(gEffectsNoneRadio, BM_SETCHECK, noneEffects ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
     SendMessageW(gShadowsOnGrassCheck, BM_SETCHECK, (_wtoi(get(L"Display.bShadowsOnGrass", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gTreeCanopyShadowsCheck, BM_SETCHECK, (_wtoi(get(L"Display.bDoCanopyShadowPass", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SetComboByData(gShadowFilterCombo, _wtoi(get(L"Display.iShadowFilter", L"2").c_str()));
@@ -1062,12 +1093,26 @@ static void ApplyControlsToINI()
         }
     }
 
-    int mode = (int)GetComboData(gWinModeCombo, 0);
-    int fullScreen = (mode == 0) ? 1 : 0;
+    int fullScreen = 1;
+    if (gFullscreenRadio && gWindowedRadio)
+    {
+        fullScreen = (SendMessageW(gFullscreenRadio, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    }
+    else
+    {
+        int mode = (int)GetComboData(gWinModeCombo, 0);
+        fullScreen = (mode == 0) ? 1 : 0;
+    }
     WriteINIInt(L"Display", L"bFull Screen", fullScreen);
 
     int vsync = (SendMessageW(gVsyncCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
     WriteINIInt(L"Display", L"iPresentInterval", vsync);
+    if (gEffectsNoneRadio && SendMessageW(gEffectsNoneRadio, BM_GETCHECK, 0, 0) == BST_CHECKED)
+    {
+        SendMessageW(gHdrCheck, BM_SETCHECK, BST_UNCHECKED, 0);
+        SendMessageW(gBloomCheck, BM_SETCHECK, BST_UNCHECKED, 0);
+    }
+
     WriteINIInt(L"Display", L"HDR", (SendMessageW(gHdrCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
 
     int aa = (int)GetComboData(gAaCombo, 0);
@@ -1150,8 +1195,12 @@ static std::map<std::wstring, std::wstring> CaptureCurrentState()
         kv[L"Display.iSize H"] = Trim(res.substr(x + 1));
     }
 
-    int mode = (int)GetComboData(gWinModeCombo, 0);
-    kv[L"Display.bFull Screen"] = (mode == 0) ? L"1" : L"0";
+    int fullScreen = 1;
+    if (gFullscreenRadio && gWindowedRadio)
+        fullScreen = (SendMessageW(gFullscreenRadio, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    else
+        fullScreen = ((int)GetComboData(gWinModeCombo, 0) == 0) ? 1 : 0;
+    kv[L"Display.bFull Screen"] = fullScreen ? L"1" : L"0";
 
     kv[L"Display.iPresentInterval"] = (SendMessageW(gVsyncCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
     kv[L"Display.HDR"] = (SendMessageW(gHdrCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
@@ -1349,7 +1398,10 @@ static void LoadFromINI()
     PopulateResolutions(gResCombo);
 
     int fullScreen = GetINIInt(L"Display", L"bFull Screen", 1);
-    SetComboByData(gWinModeCombo, (fullScreen != 0) ? 0 : 1);
+    if (gFullscreenRadio && gWindowedRadio)
+        SendMessageW((fullScreen != 0) ? gFullscreenRadio : gWindowedRadio, BM_SETCHECK, BST_CHECKED, 0);
+    else
+        SetComboByData(gWinModeCombo, (fullScreen != 0) ? 0 : 1);
 
     SendMessageW(gVsyncCheck, BM_SETCHECK, GetINIInt(L"Display", L"iPresentInterval", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gHdrCheck, BM_SETCHECK, GetINIInt(L"Display", L"HDR", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -1361,6 +1413,12 @@ static void LoadFromINI()
     SendMessageW(gDistantTreesCheck, BM_SETCHECK, GetINIInt(L"Display", L"DistantTrees", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SendMessageW(gBloomCheck, BM_SETCHECK, GetINIInt(L"Display", L"bDoBloom", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    if (gEffectsNoneRadio)
+    {
+        const BOOL noneEffects = (SendMessageW(gBloomCheck, BM_GETCHECK, 0, 0) != BST_CHECKED)
+            && (SendMessageW(gHdrCheck, BM_GETCHECK, 0, 0) != BST_CHECKED);
+        SendMessageW(gEffectsNoneRadio, BM_SETCHECK, noneEffects ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
     SendMessageW(gShadowsOnGrassCheck, BM_SETCHECK, GetINIInt(L"Display", L"bShadowsOnGrass", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gTreeCanopyShadowsCheck, BM_SETCHECK, GetINIInt(L"Display", L"bDoCanopyShadowPass", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
@@ -1457,6 +1515,18 @@ static void LoadFromINI()
     SetEditInt(gDevConsoleHistoryEdit, GetINIInt(L"Menu", L"iConsoleHistorySize", 100));
 }
 
+static void ApplyPresetByName(const wchar_t* presetName)
+{
+    const std::wstring presetPath = PresetPathFromName(presetName);
+    DWORD attr = GetFileAttributesW(presetPath.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY))
+        return;
+
+    auto kv = FilterPresetForApply(LoadPresetFile(presetPath));
+    ApplyStateToControls(kv, false);
+    gPendingPresetPath = presetPath;
+}
+
 // ----------------------------------------------------------------------------
 // UI helpers
 // ----------------------------------------------------------------------------
@@ -1524,7 +1594,7 @@ static void BuildUI(HWND hwnd)
     gFont = CreateFontIndirectW(&ncm.lfMessageFont);
 
     const int pad = sx(14);
-    const int headerH = sx(56);
+    const int headerH = sx(10);
     const int footerH = sx(64);
 
     RECT rc = {};
@@ -1542,26 +1612,6 @@ static void BuildUI(HWND hwnd)
     SetCtrlFont(gScrollHost);
     SetCtrlFont(gContent);
 
-    gTitleText = CreateWindowExW(0, L"STATIC", L"OPTIONS", WS_CHILD | WS_VISIBLE,
-        pad, sx(12), sx(240), sx(28), hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
-    SetCtrlFont(gTitleText);
-
-    const int presetBtnW = sx(90);
-    const int presetComboW = sx(240);
-    const int presetGap = sx(8);
-    const int presetTopY = sx(12);
-    const int presetLabelW = sx(56);
-    const int presetBtnH = sx(28);
-    const int presetBtnX = w - pad - presetBtnW;
-    const int presetComboX = presetBtnX - presetGap - presetComboW;
-    const int presetLabelX = presetComboX - presetGap - presetLabelW;
-
-    gPresetLabel = CreateLabel(hwnd, L"Preset", presetLabelX, sx(14), presetLabelW, sx(20));
-    gPresetCombo = CreateCombo(hwnd, IDC_PRESET_COMBO, presetComboX, presetTopY, presetComboW, sx(320));
-
-    gBtnSavePreset = CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE,
-        presetBtnX, presetTopY, presetBtnW, presetBtnH, hwnd, (HMENU)(INT_PTR)IDC_SAVE_PRESET, GetModuleHandleW(nullptr), nullptr);
-    SetCtrlFont(gBtnSavePreset);
 
     const int contentW = w - pad * 2 - sx(18);
     const int innerPad = sx(14);
@@ -1619,50 +1669,97 @@ static void BuildUI(HWND hwnd)
 
     int y = pad;
 
-    // DISPLAY
+    // GRAPHICS ADAPTER AND RESOLUTION
     {
-        const int gbH = sx(92);
-        CreateGroupBox(gContent, L"Display", pad, y, contentW, gbH);
+        const int gbH = sx(138);
+        CreateGroupBox(gContent, L"Graphics Adapter and Resolution", pad, y, contentW, gbH);
 
-        int ry = y + sx(24);
-
-        RowLabelCombo(ry, L"Resolution", gResCombo, IDC_RES_COMBO, false);
-
-        RowLabelCombo(ry, L"Window Mode", gWinModeCombo, IDC_WINMODE_COMBO, true);
-        AddComboItem(gWinModeCombo, L"Fullscreen", 0);
-        AddComboItem(gWinModeCombo, L"Windowed", 1);
+        int ry = y + sx(28);
+        CreateLabel(gContent, L"Adapter:", LxLabel, AlignLabelY(ry), labelW, labelH);
+        gAdapterCombo = CreateCombo(gContent, IDC_SAVE_PRESET + 500, LxCtrl, ry, contentW - (LxCtrl - pad) - sx(26), comboH);
+        AddComboItem(gAdapterCombo, L"Default Adapter", 0);
+        SendMessageW(gAdapterCombo, CB_SETCURSEL, 0, 0);
 
         ry += rowH + rowGap;
-        RowCheckbox(ry, L"Vertical Sync", gVsyncCheck, IDC_VSYNC, false);
+        CreateLabel(gContent, L"Resolution:", LxLabel, AlignLabelY(ry), labelW, labelH);
+        gResCombo = CreateCombo(gContent, IDC_RES_COMBO, LxCtrl, ry, contentW - (LxCtrl - pad) - sx(26), comboH);
 
-        y += gbH + sx(12);
-    }
-
-    // GRAPHICS
-    {
-        const int gbH = sx(288) + rowH;
-        CreateGroupBox(gContent, L"Graphics", pad, y, contentW, gbH);
-
-        int ry = y + sx(24);
-
-        RowCheckbox(ry, L"HDR Lighting", gHdrCheck, IDC_HDR, false);
-
-        CreateLabel(gContent, L"Anti-Aliasing", RxLabel, AlignLabelY(ry), labelW, labelH);
-        gAaCombo = CreateCombo(gContent, IDC_AA_COMBO, RxCtrl, ry, sx(140), comboH);
-        AddComboItem(gAaCombo, L"Off", 0);
+        ry += rowH + rowGap;
+        CreateLabel(gContent, L"Antialiasing:", LxLabel, AlignLabelY(ry), labelW, labelH);
+        gAaCombo = CreateCombo(gContent, IDC_AA_COMBO, LxCtrl, ry, contentW - (LxCtrl - pad) - sx(26), comboH);
+        AddComboItem(gAaCombo, L"None (best performance)", 0);
         AddComboItem(gAaCombo, L"2x", 2);
         AddComboItem(gAaCombo, L"4x", 4);
         AddComboItem(gAaCombo, L"8x", 8);
 
-        ry += rowH + rowGap;
-        gDistantLandCheck = CreateCheckbox(gContent, L"Distant Land", IDC_DIST_LAND, LxLabel, AlignLabelY(ry) - sx(2), sx(170), sx(20));
-        gDistantBuildingsCheck = CreateCheckbox(gContent, L"Distant Buildings", IDC_DIST_BUILD, LxLabel + sx(180), AlignLabelY(ry) - sx(2), sx(200), sx(20));
-        gDistantTreesCheck = CreateCheckbox(gContent, L"Distant Trees", IDC_DIST_TREES, LxLabel + sx(400), AlignLabelY(ry) - sx(2), sx(160), sx(20));
+        y += gbH + sx(12);
+    }
 
-        ry += rowH + rowGap;
+    {
+        const int gbY = y;
+        const int gbH = sx(116);
+        const int colGap = sx(12);
+        const int colW = (contentW - (colGap * 2)) / 3;
+
+        CreateGroupBox(gContent, L"Mode", pad, gbY, colW, gbH);
+        CreateGroupBox(gContent, L"Screen Effects", pad + colW + colGap, gbY, colW, gbH);
+        CreateGroupBox(gContent, L"Distant Rendering", pad + (colW + colGap) * 2, gbY, colW, gbH);
+
+        const int row1 = gbY + sx(30);
+        gWindowedRadio = CreateWindowExW(0, L"BUTTON", L"Windowed", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
+            pad + innerPad, row1, sx(120), sx(20), gContent, (HMENU)(INT_PTR)IDC_MODE_WINDOWED, GetModuleHandleW(nullptr), nullptr);
+        SetCtrlFont(gWindowedRadio);
+        gFullscreenRadio = CreateWindowExW(0, L"BUTTON", L"Fullscreen", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+            pad + innerPad, row1 + rowH, sx(120), sx(20), gContent, (HMENU)(INT_PTR)IDC_MODE_FULLSCREEN, GetModuleHandleW(nullptr), nullptr);
+        SetCtrlFont(gFullscreenRadio);
+        gVsyncCheck = CreateCheckbox(gContent, L"V. Sync", IDC_VSYNC, pad + innerPad, row1 + rowH * 2, sx(100), sx(20));
+
+        const int effectsX = pad + colW + colGap + innerPad;
+        gEffectsNoneRadio = CreateWindowExW(0, L"BUTTON", L"None", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
+            effectsX, row1, sx(120), sx(20), gContent, (HMENU)(INT_PTR)IDC_EFFECTS_NONE, GetModuleHandleW(nullptr), nullptr);
+        SetCtrlFont(gEffectsNoneRadio);
+        gBloomCheck = CreateWindowExW(0, L"BUTTON", L"Bloom", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+            effectsX, row1 + rowH, sx(120), sx(20), gContent, (HMENU)(INT_PTR)IDC_BLOOM, GetModuleHandleW(nullptr), nullptr);
+        SetCtrlFont(gBloomCheck);
+        gHdrCheck = CreateWindowExW(0, L"BUTTON", L"HDR", WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
+            effectsX, row1 + rowH * 2, sx(120), sx(20), gContent, (HMENU)(INT_PTR)IDC_HDR, GetModuleHandleW(nullptr), nullptr);
+        SetCtrlFont(gHdrCheck);
+
+        const int distX = pad + (colW + colGap) * 2 + innerPad;
+        gDistantLandCheck = CreateCheckbox(gContent, L"Distant Landscape", IDC_DIST_LAND, distX, row1, colW - innerPad, sx(20));
+        gDistantBuildingsCheck = CreateCheckbox(gContent, L"Distant Buildings", IDC_DIST_BUILD, distX, row1 + rowH, colW - innerPad, sx(20));
+        gDistantTreesCheck = CreateCheckbox(gContent, L"Distant Trees", IDC_DIST_TREES, distX, row1 + rowH * 2, colW - innerPad, sx(20));
+
+        y += gbH + sx(12);
+    }
+
+    {
+        const int gbH = sx(86);
+        CreateGroupBox(gContent, L"Video Quality Presets", pad, y, contentW, gbH);
+        const int by = y + sx(24);
+        gBtnDefaults = CreateWindowExW(0, L"BUTTON", L"Reset to Defaults", WS_CHILD | WS_VISIBLE,
+            pad + sx(10), by, sx(145), sx(34), gContent, (HMENU)(INT_PTR)IDC_DEFAULTS, GetModuleHandleW(nullptr), nullptr);
+        SetCtrlFont(gBtnDefaults);
+        int px = pad + sx(165);
+        auto mkBtn=[&](HWND& out,const wchar_t* t,int id,int bw){ out=CreateWindowExW(0,L"BUTTON",t,WS_CHILD|WS_VISIBLE,px,by,sx(bw),sx(34),gContent,(HMENU)(INT_PTR)id,GetModuleHandleW(nullptr),nullptr); SetCtrlFont(out); px += sx(bw+10);};
+        mkBtn(gBtnPresetVeryLow, L"Very Low", IDC_PRESET_VERYLOW, 100);
+        mkBtn(gBtnPresetLow, L"Low", IDC_PRESET_LOW, 85);
+        mkBtn(gBtnPresetMedium, L"Medium", IDC_PRESET_MEDIUM, 95);
+        mkBtn(gBtnPresetHigh, L"High", IDC_PRESET_HIGH, 85);
+        mkBtn(gBtnPresetUltra, L"Ultra High", IDC_PRESET_ULTRA, 105);
+
+        y += gbH + sx(12);
+    }
+
+    // ADDITIONAL GRAPHICS
+    {
+        const int gbH = sx(236) + rowH;
+        CreateGroupBox(gContent, L"Additional Graphics", pad, y, contentW, gbH);
+
+        int ry = y + sx(24);
+
         gShadowsOnGrassCheck = CreateCheckbox(gContent, L"Shadows on Grass", IDC_SHADOWS_GRASS, LxLabel, AlignLabelY(ry) - sx(2), sx(200), sx(20));
         gTreeCanopyShadowsCheck = CreateCheckbox(gContent, L"Tree Canopy Shadows", IDC_CANOPY_SHADOWS, LxLabel + sx(210), AlignLabelY(ry) - sx(2), sx(230), sx(20));
-        gBloomCheck = CreateCheckbox(gContent, L"Bloom Lighting", IDC_BLOOM, LxLabel + sx(450), AlignLabelY(ry) - sx(2), sx(160), sx(20));
 
         ry += rowH + rowGap;
 
@@ -1810,16 +1907,12 @@ static void BuildUI(HWND hwnd)
 
     int btnY = h - footerH + sx(18);
 
-    gBtnDefaults = CreateWindowExW(0, L"BUTTON", L"Defaults", WS_CHILD | WS_VISIBLE,
-        pad, btnY, sx(120), sx(30), hwnd, (HMENU)(INT_PTR)IDC_DEFAULTS, GetModuleHandleW(nullptr), nullptr);
-    SetCtrlFont(gBtnDefaults);
-
-    gBtnCancel = CreateWindowExW(0, L"BUTTON", L"Close", WS_CHILD | WS_VISIBLE,
-        w - pad - sx(180), btnY, sx(80), sx(30), hwnd, (HMENU)(INT_PTR)IDC_CANCEL, GetModuleHandleW(nullptr), nullptr);
+    gBtnCancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE,
+        w - pad - sx(180), btnY, sx(110), sx(30), hwnd, (HMENU)(INT_PTR)IDC_CANCEL, GetModuleHandleW(nullptr), nullptr);
     SetCtrlFont(gBtnCancel);
 
-    gBtnApply = CreateWindowExW(0, L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE,
-        w - pad - sx(90), btnY, sx(90), sx(30), hwnd, (HMENU)(INT_PTR)IDC_APPLY, GetModuleHandleW(nullptr), nullptr);
+    gBtnApply = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE,
+        w - pad - sx(60), btnY, sx(60), sx(30), hwnd, (HMENU)(INT_PTR)IDC_APPLY, GetModuleHandleW(nullptr), nullptr);
     SetCtrlFont(gBtnApply);
 
     PopulatePresetCombo();
@@ -1990,9 +2083,8 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             const int pad = MulDiv(14, dpi, 96);
             const int btnY = h - footerH + MulDiv(18, dpi, 96);
 
-            if (gBtnDefaults)        SetWindowPos(gBtnDefaults, nullptr, pad, btnY, MulDiv(120, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
-            if (gBtnCancel)          SetWindowPos(gBtnCancel, nullptr, w - pad - MulDiv(180, dpi, 96), btnY, MulDiv(80, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
-            if (gBtnApply)           SetWindowPos(gBtnApply, nullptr, w - pad - MulDiv(90, dpi, 96), btnY, MulDiv(90, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
+            if (gBtnCancel)          SetWindowPos(gBtnCancel, nullptr, w - pad - MulDiv(180, dpi, 96), btnY, MulDiv(110, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
+            if (gBtnApply)           SetWindowPos(gBtnApply, nullptr, w - pad - MulDiv(60, dpi, 96), btnY, MulDiv(60, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
 
             const int presetBtnW = MulDiv(90, dpi, 96);
             const int presetComboW = MulDiv(240, dpi, 96);
@@ -2026,6 +2118,16 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             OnSavePreset();
             return 0;
         }
+        if ((id == IDC_PRESET_VERYLOW || id == IDC_PRESET_LOW || id == IDC_PRESET_MEDIUM || id == IDC_PRESET_HIGH || id == IDC_PRESET_ULTRA) && code == BN_CLICKED)
+        {
+            if (id == IDC_PRESET_VERYLOW) ApplyPresetByName(L"Very Low");
+            else if (id == IDC_PRESET_LOW) ApplyPresetByName(L"Low");
+            else if (id == IDC_PRESET_MEDIUM) ApplyPresetByName(L"Medium");
+            else if (id == IDC_PRESET_HIGH) ApplyPresetByName(L"High");
+            else if (id == IDC_PRESET_ULTRA) ApplyPresetByName(L"Ultra High");
+            return 0;
+        }
+
         if (id == IDC_DEFAULTS && code == BN_CLICKED)
         {
             const std::wstring lowPath = PresetPathFromName(L"Low");
@@ -2058,6 +2160,17 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
         }
 
+        if (id == IDC_EFFECTS_NONE && code == BN_CLICKED)
+        {
+            SendMessageW(gBloomCheck, BM_SETCHECK, BST_UNCHECKED, 0);
+            SendMessageW(gHdrCheck, BM_SETCHECK, BST_UNCHECKED, 0);
+            return 0;
+        }
+        if ((id == IDC_BLOOM || id == IDC_HDR) && code == BN_CLICKED)
+        {
+            if (gEffectsNoneRadio) SendMessageW(gEffectsNoneRadio, BM_SETCHECK, BST_UNCHECKED, 0);
+            return 0;
+        }
         if (id == IDC_CANCEL && code == BN_CLICKED)
         {
             DestroyWindow(hwnd);
@@ -2079,6 +2192,7 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
             ApplyControlsToINI();
             LoadFromINI();
+            DestroyWindow(hwnd);
             return 0;
         }
         return 0;
