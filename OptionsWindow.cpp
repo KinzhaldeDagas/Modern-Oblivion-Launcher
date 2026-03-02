@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstdint>
+#include <climits>
 
 #include "OptionsWindow.h"
 #include "iniOblivion.h"
@@ -81,6 +82,11 @@ static HWND gAdapterCombo = nullptr;
 static HWND gWindowedRadio = nullptr;
 static HWND gFullscreenRadio = nullptr;
 static HWND gEffectsNoneRadio = nullptr;
+static HWND gAutoSaveCheck = nullptr;
+static HWND gUseEyeEnvMappingCheck = nullptr;
+static HWND gUseBlurShaderCheck = nullptr;
+static HWND gWaterHiResCheck = nullptr;
+static HWND gActorSelfShadowingCheck = nullptr;
 
 static HWND gResCombo = nullptr;
 static HWND gWinModeCombo = nullptr;
@@ -161,6 +167,12 @@ static const int IDC_VSYNC = 1202;
 static const int IDC_MODE_WINDOWED = 1203;
 static const int IDC_MODE_FULLSCREEN = 1204;
 static const int IDC_EFFECTS_NONE = 1205;
+static const int IDC_ADAPTER_COMBO = 1206;
+static const int IDC_AUTOSAVE = 1207;
+static const int IDC_EYE_ENVMAP = 1208;
+static const int IDC_BLUR_SHADER = 1209;
+static const int IDC_WATER_HIRES = 1210;
+static const int IDC_ACTOR_SELF_SHADOW = 1211;
 
 static const int IDC_HDR = 1300;
 static const int IDC_AA_COMBO = 1301;
@@ -651,6 +663,7 @@ static bool IsManagedKey(const std::wstring& fullKey)
         L"Display.iPresentInterval",
         L"Display.HDR",
         L"Display.iMultiSample",
+        L"Display.iAdapter",
         L"Display.DistantLand",
         L"Display.DistantBuildings",
         L"Display.DistantTrees",
@@ -668,6 +681,7 @@ static bool IsManagedKey(const std::wstring& fullKey)
         L"Water.bUseWaterDepth",
         L"Decals.iMaxDecalsPerFrame",
         L"TerrainManager.uGridDistantCount",
+        L"TerrainManager.uGridDistantTreeRange",
         L"Trees.uGridDistantTreeRange",
         L"Advanced.TextureSize",
         L"Advanced.TreeFade",
@@ -677,9 +691,14 @@ static bool IsManagedKey(const std::wstring& fullKey)
         L"Audio.MasterVolume",
         L"Audio.EffectsVolume",
         L"Audio.MusicVolume",
-        L"Controls.fMouseSensitivity",
-        L"Controls.bInvertYValues",
-        L"Controls.Always Run",
+        L"Controls.MouseSensitivity",
+        L"Controls.InvertMouse",
+        L"Controls.AlwaysRun",
+        L"Controls.AutoSave",
+        L"General.bUseEyeEnvMapping",
+        L"BlurShader.bUseBlurShader",
+        L"Water.bUseWaterHiRes",
+        L"Display.bActorSelfShadowing",
         L"MAIN.bEnableBorderRegion",
         L"Display.bAllowScreenShot",
         L"Messages.iFileLogging",
@@ -754,6 +773,14 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         return true;
     }
 
+    if (_wcsicmp(fullKey.c_str(), L"Display.iAdapter") == 0)
+    {
+        int adapter = _wtoi(v.c_str());
+        if (!ComboContainsData(gAdapterCombo, adapter)) return false;
+        outValue = std::to_wstring(adapter);
+        return true;
+    }
+
     if (_wcsicmp(fullKey.c_str(), L"Display.bFull Screen") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Display.iPresentInterval") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Display.HDR") == 0 ||
@@ -769,8 +796,13 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         _wcsicmp(fullKey.c_str(), L"Water.bUseWaterReflectionsTrees") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Water.bUseWaterDisplacements") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Water.bUseWaterDepth") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Controls.bInvertYValues") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Controls.Always Run") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"Controls.InvertMouse") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"Controls.AlwaysRun") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"Controls.AutoSave") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"General.bUseEyeEnvMapping") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"BlurShader.bUseBlurShader") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"Water.bUseWaterHiRes") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"Display.bActorSelfShadowing") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Display.bAllowScreenShot") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Messages.iFileLogging") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Display.iDebugText") == 0)
@@ -802,7 +834,7 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         _wcsicmp(fullKey.c_str(), L"Audio.MasterVolume") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Audio.EffectsVolume") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Audio.MusicVolume") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Controls.fMouseSensitivity") == 0)
+        _wcsicmp(fullKey.c_str(), L"Controls.MouseSensitivity") == 0)
     {
         int n = _wtoi(v.c_str());
         outValue = std::to_wstring(clamp0100(n));
@@ -855,6 +887,7 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
     }
 
     if (_wcsicmp(fullKey.c_str(), L"TerrainManager.uGridDistantCount") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"TerrainManager.uGridDistantTreeRange") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Trees.uGridDistantTreeRange") == 0)
     {
         int n = _wtoi(v.c_str());
@@ -989,6 +1022,7 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
 
     int aa = _wtoi(get(L"Display.iMultiSample", L"0").c_str());
     SetComboByData(gAaCombo, aa);
+    SetComboByData(gAdapterCombo, _wtoi(get(L"Display.iAdapter", L"0").c_str()));
 
     SendMessageW(gDistantLandCheck, BM_SETCHECK, (_wtoi(get(L"Display.DistantLand", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gDistantBuildingsCheck, BM_SETCHECK, (_wtoi(get(L"Display.DistantBuildings", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -1021,7 +1055,9 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
     SetComboByData(gBloodDecalsCombo, _wtoi(get(L"Decals.iMaxDecalsPerFrame", L"10").c_str()));
 
     SetEditInt(gGridDistantCountEdit, _wtoi(get(L"TerrainManager.uGridDistantCount", L"30").c_str()));
-    SetEditInt(gGridDistantTreeRangeEdit, _wtoi(get(L"Trees.uGridDistantTreeRange", L"30").c_str()));
+    std::wstring treeRange = get(L"Trees.uGridDistantTreeRange", L"");
+    if (treeRange.empty()) treeRange = get(L"TerrainManager.uGridDistantTreeRange", L"30");
+    SetEditInt(gGridDistantTreeRangeEdit, _wtoi(treeRange.c_str()));
 
     std::wstring tex = get(L"Advanced.TextureSize", L"Large");
     int tcount = (int)SendMessageW(gTexSizeCombo, CB_GETCOUNT, 0, 0);
@@ -1059,12 +1095,23 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
     SetTextInt(gEffectsVolVal, ev);
     SetTextInt(gMusicVolVal, mus);
 
-    int ms = clamp01(_wtoi(get(L"Controls.fMouseSensitivity", L"50").c_str()));
+    std::wstring msText = get(L"Controls.MouseSensitivity", L"");
+    if (msText.empty()) msText = get(L"Controls.fMouseSensitivity", L"50");
+    int ms = clamp01(_wtoi(msText.c_str()));
     SetTrackPos(gMouseSensTrack, ms);
     SetTextInt(gMouseSensVal, ms);
 
-    SendMessageW(gInvertMouseCheck, BM_SETCHECK, (_wtoi(get(L"Controls.bInvertYValues", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(gAlwaysRunCheck, BM_SETCHECK, (_wtoi(get(L"Controls.Always Run", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    std::wstring invertText = get(L"Controls.InvertMouse", L"");
+    if (invertText.empty()) invertText = get(L"Controls.bInvertYValues", L"0");
+    std::wstring runText = get(L"Controls.AlwaysRun", L"");
+    if (runText.empty()) runText = get(L"Controls.Always Run", L"1");
+    SendMessageW(gInvertMouseCheck, BM_SETCHECK, (_wtoi(invertText.c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gAlwaysRunCheck, BM_SETCHECK, (_wtoi(runText.c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gAutoSaveCheck, BM_SETCHECK, (_wtoi(get(L"Controls.AutoSave", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gUseEyeEnvMappingCheck, BM_SETCHECK, (_wtoi(get(L"General.bUseEyeEnvMapping", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gUseBlurShaderCheck, BM_SETCHECK, (_wtoi(get(L"BlurShader.bUseBlurShader", L"1").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gWaterHiResCheck, BM_SETCHECK, (_wtoi(get(L"Water.bUseWaterHiRes", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gActorSelfShadowingCheck, BM_SETCHECK, (_wtoi(get(L"Display.bActorSelfShadowing", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
     int ber = _wtoi(get(L"MAIN.bEnableBorderRegion", L"1").c_str());
     SendMessageW(gDisableBorderRegionsCheck, BM_SETCHECK, (ber == 0) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -1117,6 +1164,7 @@ static void ApplyControlsToINI()
 
     int aa = (int)GetComboData(gAaCombo, 0);
     WriteINIInt(L"Display", L"iMultiSample", aa);
+    WriteINIInt(L"Display", L"iAdapter", (int)GetComboData(gAdapterCombo, 0));
 
     WriteINIInt(L"Display", L"DistantLand", (SendMessageW(gDistantLandCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
     WriteINIInt(L"Display", L"DistantBuildings", (SendMessageW(gDistantBuildingsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
@@ -1140,6 +1188,7 @@ static void ApplyControlsToINI()
     WriteINIInt(L"Decals", L"iMaxDecalsPerFrame", (int)GetComboData(gBloodDecalsCombo, 10));
 
     WriteINIInt(L"TerrainManager", L"uGridDistantCount", GetEditInt(gGridDistantCountEdit, 30));
+    WriteINIInt(L"TerrainManager", L"uGridDistantTreeRange", GetEditInt(gGridDistantTreeRangeEdit, 30));
     WriteINIInt(L"Trees", L"uGridDistantTreeRange", GetEditInt(gGridDistantTreeRangeEdit, 30));
 
     WriteINIString(L"Advanced", L"TextureSize", GetComboText(gTexSizeCombo));
@@ -1155,9 +1204,14 @@ static void ApplyControlsToINI()
     int mouseSensitivity = GetTrackPos(gMouseSensTrack, 50);
     int invertMouse = (SendMessageW(gInvertMouseCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
     int alwaysRun = (SendMessageW(gAlwaysRunCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
-    WriteINIInt(L"Controls", L"fMouseSensitivity", mouseSensitivity);
-    WriteINIInt(L"Controls", L"bInvertYValues", invertMouse);
-    WriteINIInt(L"Controls", L"Always Run", alwaysRun);
+    WriteINIInt(L"Controls", L"MouseSensitivity", mouseSensitivity);
+    WriteINIInt(L"Controls", L"InvertMouse", invertMouse);
+    WriteINIInt(L"Controls", L"AlwaysRun", alwaysRun);
+    WriteINIInt(L"Controls", L"AutoSave", (SendMessageW(gAutoSaveCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
+    WriteINIInt(L"General", L"bUseEyeEnvMapping", (SendMessageW(gUseEyeEnvMappingCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
+    WriteINIInt(L"BlurShader", L"bUseBlurShader", (SendMessageW(gUseBlurShaderCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
+    WriteINIInt(L"Water", L"bUseWaterHiRes", (SendMessageW(gWaterHiResCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
+    WriteINIInt(L"Display", L"bActorSelfShadowing", (SendMessageW(gActorSelfShadowingCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
 
     WriteINIInt(L"MAIN", L"bEnableBorderRegion",
         (SendMessageW(gDisableBorderRegionsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 0 : 1);
@@ -1207,6 +1261,7 @@ static std::map<std::wstring, std::wstring> CaptureCurrentState()
 
     int aa = (int)GetComboData(gAaCombo, 0);
     kv[L"Display.iMultiSample"] = std::to_wstring(aa);
+    kv[L"Display.iAdapter"] = std::to_wstring((int)GetComboData(gAdapterCombo, 0));
 
     kv[L"Display.DistantLand"] = (SendMessageW(gDistantLandCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
     kv[L"Display.DistantBuildings"] = (SendMessageW(gDistantBuildingsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
@@ -1242,9 +1297,14 @@ static std::map<std::wstring, std::wstring> CaptureCurrentState()
     kv[L"Audio.EffectsVolume"] = std::to_wstring(GetTrackPos(gEffectsVolTrack, 80));
     kv[L"Audio.MusicVolume"] = std::to_wstring(GetTrackPos(gMusicVolTrack, 70));
 
-    kv[L"Controls.fMouseSensitivity"] = std::to_wstring(GetTrackPos(gMouseSensTrack, 50));
-    kv[L"Controls.bInvertYValues"] = (SendMessageW(gInvertMouseCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
-    kv[L"Controls.Always Run"] = (SendMessageW(gAlwaysRunCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"Controls.MouseSensitivity"] = std::to_wstring(GetTrackPos(gMouseSensTrack, 50));
+    kv[L"Controls.InvertMouse"] = (SendMessageW(gInvertMouseCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"Controls.AlwaysRun"] = (SendMessageW(gAlwaysRunCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"Controls.AutoSave"] = (SendMessageW(gAutoSaveCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"General.bUseEyeEnvMapping"] = (SendMessageW(gUseEyeEnvMappingCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"BlurShader.bUseBlurShader"] = (SendMessageW(gUseBlurShaderCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"Water.bUseWaterHiRes"] = (SendMessageW(gWaterHiResCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
+    kv[L"Display.bActorSelfShadowing"] = (SendMessageW(gActorSelfShadowingCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"1" : L"0";
 
     kv[L"MAIN.bEnableBorderRegion"] = (SendMessageW(gDisableBorderRegionsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? L"0" : L"1";
 
@@ -1407,6 +1467,7 @@ static void LoadFromINI()
     SendMessageW(gHdrCheck, BM_SETCHECK, GetINIInt(L"Display", L"HDR", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SetComboByData(gAaCombo, GetINIInt(L"Display", L"iMultiSample", 0));
+    SetComboByData(gAdapterCombo, GetINIInt(L"Display", L"iAdapter", 0));
 
     SendMessageW(gDistantLandCheck, BM_SETCHECK, GetINIInt(L"Display", L"DistantLand", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gDistantBuildingsCheck, BM_SETCHECK, GetINIInt(L"Display", L"DistantBuildings", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -1443,7 +1504,9 @@ static void LoadFromINI()
     SetComboByData(gBloodDecalsCombo, GetINIInt(L"Decals", L"iMaxDecalsPerFrame", 10));
 
     SetEditInt(gGridDistantCountEdit, GetINIInt(L"TerrainManager", L"uGridDistantCount", 30));
-    SetEditInt(gGridDistantTreeRangeEdit, GetINIInt(L"Trees", L"uGridDistantTreeRange", 30));
+    int treeRangeIni = GetINIInt(L"Trees", L"uGridDistantTreeRange", INT_MIN);
+    if (treeRangeIni == INT_MIN) treeRangeIni = GetINIInt(L"TerrainManager", L"uGridDistantTreeRange", 30);
+    SetEditInt(gGridDistantTreeRangeEdit, treeRangeIni);
 
     std::wstring tex = GetINIString(L"Advanced", L"TextureSize", L"Large");
     int tcount = (int)SendMessageW(gTexSizeCombo, CB_GETCOUNT, 0, 0);
@@ -1481,12 +1544,23 @@ static void LoadFromINI()
     SetTextInt(gEffectsVolVal, ev);
     SetTextInt(gMusicVolVal, mus);
 
-    int ms = clamp01(GetINIInt(L"Controls", L"fMouseSensitivity", 50));
+    int ms = GetINIInt(L"Controls", L"MouseSensitivity", INT_MIN);
+    if (ms == INT_MIN) ms = GetINIInt(L"Controls", L"fMouseSensitivity", 50);
+    ms = clamp01(ms);
     SetTrackPos(gMouseSensTrack, ms);
     SetTextInt(gMouseSensVal, ms);
 
-    SendMessageW(gInvertMouseCheck, BM_SETCHECK, GetINIInt(L"Controls", L"bInvertYValues", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(gAlwaysRunCheck, BM_SETCHECK, GetINIInt(L"Controls", L"Always Run", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+    int invertMouse = GetINIInt(L"Controls", L"InvertMouse", INT_MIN);
+    if (invertMouse == INT_MIN) invertMouse = GetINIInt(L"Controls", L"bInvertYValues", 0);
+    int alwaysRun = GetINIInt(L"Controls", L"AlwaysRun", INT_MIN);
+    if (alwaysRun == INT_MIN) alwaysRun = GetINIInt(L"Controls", L"Always Run", 1);
+    SendMessageW(gInvertMouseCheck, BM_SETCHECK, invertMouse ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gAlwaysRunCheck, BM_SETCHECK, alwaysRun ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gAutoSaveCheck, BM_SETCHECK, GetINIInt(L"Controls", L"AutoSave", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gUseEyeEnvMappingCheck, BM_SETCHECK, GetINIInt(L"General", L"bUseEyeEnvMapping", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gUseBlurShaderCheck, BM_SETCHECK, GetINIInt(L"BlurShader", L"bUseBlurShader", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gWaterHiResCheck, BM_SETCHECK, GetINIInt(L"Water", L"bUseWaterHiRes", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gActorSelfShadowingCheck, BM_SETCHECK, GetINIInt(L"Display", L"bActorSelfShadowing", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
     std::wstring rw = GetINIString(L"Display", L"iSize W", L"");
     std::wstring rh = GetINIString(L"Display", L"iSize H", L"");
@@ -1676,7 +1750,7 @@ static void BuildUI(HWND hwnd)
 
         int ry = y + sx(28);
         CreateLabel(gContent, L"Adapter:", LxLabel, AlignLabelY(ry), labelW, labelH);
-        gAdapterCombo = CreateCombo(gContent, IDC_SAVE_PRESET + 500, LxCtrl, ry, contentW - (LxCtrl - pad) - sx(26), comboH);
+        gAdapterCombo = CreateCombo(gContent, IDC_ADAPTER_COMBO, LxCtrl, ry, contentW - (LxCtrl - pad) - sx(26), comboH);
         AddComboItem(gAdapterCombo, L"Default Adapter", 0);
         SendMessageW(gAdapterCombo, CB_SETCURSEL, 0, 0);
 
@@ -1753,7 +1827,7 @@ static void BuildUI(HWND hwnd)
 
     // ADDITIONAL GRAPHICS
     {
-        const int gbH = sx(236) + rowH;
+        const int gbH = sx(236) + rowH + rowH + rowGap;
         CreateGroupBox(gContent, L"Additional Graphics", pad, y, contentW, gbH);
 
         int ry = y + sx(24);
@@ -1797,6 +1871,10 @@ static void BuildUI(HWND hwnd)
 
         ry += rowH + rowGap;
         gWindowReflectionsCheck = CreateCheckbox(gContent, L"Window Reflections", IDC_WINDOW_REFLECT, RxLabel, AlignLabelY(ry) - sx(2), sx(220), sx(20));
+        gWaterHiResCheck = CreateCheckbox(gContent, L"Hi-Res Water", IDC_WATER_HIRES, LxLabel, AlignLabelY(ry) - sx(2), sx(180), sx(20));
+
+        ry += rowH + rowGap;
+        gActorSelfShadowingCheck = CreateCheckbox(gContent, L"Actor Self Shadowing", IDC_ACTOR_SELF_SHADOW, RxLabel, AlignLabelY(ry) - sx(2), sx(220), sx(20));
 
         CreateLabel(gContent, L"Blood Decals", LxLabel, AlignLabelY(ry), labelW, labelH);
         gBloodDecalsCombo = CreateComboBox(gContent, IDC_BLOOD_DECALS, LxCtrl, ry, sx(140), sx(200));
@@ -1868,17 +1946,22 @@ static void BuildUI(HWND hwnd)
         ry += rowH + rowGap;
         gInvertMouseCheck = CreateCheckbox(gContent, L"Invert Mouse", IDC_INVERTMOUSE, LxLabel, AlignLabelY(ry) - sx(2), sx(180), sx(20));
         gAlwaysRunCheck = CreateCheckbox(gContent, L"Always Run", IDC_ALWAYSRUN, LxLabel + sx(200), AlignLabelY(ry) - sx(2), sx(160), sx(20));
+        gAutoSaveCheck = CreateCheckbox(gContent, L"Auto Save", IDC_AUTOSAVE, LxLabel + sx(380), AlignLabelY(ry) - sx(2), sx(160), sx(20));
 
         y += gbH + sx(12);
     }
 
     // GAMEPLAY
     {
-        const int gbH = sx(76);
+        const int gbH = sx(112);
         CreateGroupBox(gContent, L"Gameplay", pad, y, contentW, gbH);
 
         int ry = y + sx(28);
         gDisableBorderRegionsCheck = CreateCheckbox(gContent, L"Disable Border Regions", IDC_DISABLE_BORDER, LxLabel, AlignLabelY(ry) - sx(2), sx(260), sx(20));
+        gUseEyeEnvMappingCheck = CreateCheckbox(gContent, L"Use Eye Env Mapping", IDC_EYE_ENVMAP, LxLabel + sx(280), AlignLabelY(ry) - sx(2), sx(220), sx(20));
+
+        ry += rowH + rowGap;
+        gUseBlurShaderCheck = CreateCheckbox(gContent, L"Use Blur Shader", IDC_BLUR_SHADER, LxLabel, AlignLabelY(ry) - sx(2), sx(220), sx(20));
 
         y += gbH + sx(12);
     }
@@ -2047,7 +2130,7 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int w = rc.right - rc.left;
             int h = rc.bottom - rc.top;
 
-            int headerH = 56;
+            int headerH = 10;
             int footerH = 64;
 
             int dpi = 96;
@@ -2085,21 +2168,6 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
             if (gBtnCancel)          SetWindowPos(gBtnCancel, nullptr, w - pad - MulDiv(180, dpi, 96), btnY, MulDiv(110, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
             if (gBtnApply)           SetWindowPos(gBtnApply, nullptr, w - pad - MulDiv(60, dpi, 96), btnY, MulDiv(60, dpi, 96), MulDiv(30, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
-
-            const int presetBtnW = MulDiv(90, dpi, 96);
-            const int presetComboW = MulDiv(240, dpi, 96);
-            const int presetGap = MulDiv(8, dpi, 96);
-            const int presetTopY = MulDiv(12, dpi, 96);
-            const int presetBtnH = MulDiv(28, dpi, 96);
-            const int presetLabelW = MulDiv(56, dpi, 96);
-
-            const int presetBtnX = w - pad - presetBtnW;
-            const int presetComboX = presetBtnX - presetGap - presetComboW;
-            const int presetLabelX = presetComboX - presetGap - presetLabelW;
-
-            if (gPresetLabel) SetWindowPos(gPresetLabel, nullptr, presetLabelX, MulDiv(14, dpi, 96), presetLabelW, MulDiv(20, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
-            if (gPresetCombo) SetWindowPos(gPresetCombo, nullptr, presetComboX, presetTopY, presetComboW, MulDiv(300, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
-            if (gBtnSavePreset) SetWindowPos(gBtnSavePreset, nullptr, presetBtnX, presetTopY, presetBtnW, presetBtnH, SWP_NOZORDER | SWP_NOACTIVATE);
         }
         return 0;
 
@@ -2108,16 +2176,6 @@ static LRESULT CALLBACK OptionsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         int id = LOWORD(wParam);
         int code = HIWORD(wParam);
 
-        if (id == IDC_PRESET_COMBO && code == CBN_SELCHANGE)
-        {
-            OnPresetChange();
-            return 0;
-        }
-        if (id == IDC_SAVE_PRESET && code == BN_CLICKED)
-        {
-            OnSavePreset();
-            return 0;
-        }
         if ((id == IDC_PRESET_VERYLOW || id == IDC_PRESET_LOW || id == IDC_PRESET_MEDIUM || id == IDC_PRESET_HIGH || id == IDC_PRESET_ULTRA) && code == BN_CLICKED)
         {
             if (id == IDC_PRESET_VERYLOW) ApplyPresetByName(L"Very Low");
