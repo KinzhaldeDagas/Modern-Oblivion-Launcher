@@ -13,6 +13,7 @@
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(linker, "/MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\"")
 #include "resource.h"
 #include "OptionsWindow.h"
 #include "DataFilesWindow.h"
@@ -25,13 +26,21 @@ using namespace Gdiplus;
 #define BUTTON_HEIGHT 35
 #define BUTTON_SPACING 20
 #define EXTRA_LEFT_SHIFT 32
+#define CSE_BUTTON_EXTRA_WIDTH 16
 
 enum ButtonIDs {
     ID_BUTTON_PLAY = 1,
+    ID_BUTTON_LAUNCH_CSE,
     ID_BUTTON_OPTIONS,
     ID_BUTTON_DATAFILES,
     ID_BUTTON_TECHSUPPORT,
     ID_BUTTON_EXIT
+};
+
+enum class ConstructionSetLaunchMode {
+    None,
+    Batch,
+    Exe
 };
 
 static ULONG_PTR g_gdiplusToken = 0;
@@ -41,6 +50,10 @@ static HFONT  g_hCustomFont = nullptr;
 static std::wstring g_fontFaceName;
 static std::wstring g_fontFilePath;
 static HINSTANCE g_hInstance = nullptr;
+static HWND g_hLaunchCseButton = nullptr;
+static ConstructionSetLaunchMode g_csLaunchMode = ConstructionSetLaunchMode::None;
+static std::wstring g_csLaunchPath;
+static std::wstring g_csLaunchWorkingDir;
 
 static std::unordered_map<HWND, bool> g_btnHot;
 
@@ -313,6 +326,70 @@ static void LaunchObseLoader() {
     ShellExecuteW(nullptr, L"open", obseExe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
+static std::wstring ResolveOblivionRootPath() {
+    std::wstring basePath = GetOblivionInstallPath();
+    if (basePath.empty()) {
+        basePath = GetLocalDir();
+    }
+    return basePath;
+}
+
+static void DetectConstructionSetLaunchTarget() {
+    g_csLaunchMode = ConstructionSetLaunchMode::None;
+    g_csLaunchPath.clear();
+    g_csLaunchWorkingDir.clear();
+
+    const std::wstring rootPath = ResolveOblivionRootPath();
+    const std::wstring oblivionExe = rootPath + L"Oblivion.exe";
+    if (!PathFileExistsW(oblivionExe.c_str())) {
+        return;
+    }
+
+    const std::wstring cseBatch = rootPath + L"Launch CSE.bat";
+    const std::wstring csExe = rootPath + L"TESConstructionSet.exe";
+
+    if (PathFileExistsW(cseBatch.c_str())) {
+        g_csLaunchMode = ConstructionSetLaunchMode::Batch;
+        g_csLaunchPath = cseBatch;
+        g_csLaunchWorkingDir = rootPath;
+        return;
+    }
+
+    if (PathFileExistsW(csExe.c_str())) {
+        g_csLaunchMode = ConstructionSetLaunchMode::Exe;
+        g_csLaunchPath = csExe;
+        g_csLaunchWorkingDir = rootPath;
+    }
+}
+
+static void LaunchConstructionSet() {
+    if (g_csLaunchMode == ConstructionSetLaunchMode::None || g_csLaunchPath.empty()) {
+        return;
+    }
+
+    if (g_csLaunchMode == ConstructionSetLaunchMode::Batch) {
+        std::wstring params = L"/C \"\"" + g_csLaunchPath + L"\"\"";
+        ShellExecuteW(
+            nullptr,
+            L"open",
+            L"cmd.exe",
+            params.c_str(),
+            g_csLaunchWorkingDir.empty() ? nullptr : g_csLaunchWorkingDir.c_str(),
+            SW_SHOWNORMAL
+        );
+        return;
+    }
+
+    ShellExecuteW(
+        nullptr,
+        L"open",
+        g_csLaunchPath.c_str(),
+        nullptr,
+        g_csLaunchWorkingDir.empty() ? nullptr : g_csLaunchWorkingDir.c_str(),
+        SW_SHOWNORMAL
+    );
+}
+
 void DrawButtonItem(const DRAWITEMSTRUCT* ds) {
     int bx = ds->rcItem.left;
     int by = ds->rcItem.top;
@@ -376,7 +453,8 @@ void DrawButtonItem(const DRAWITEMSTRUCT* ds) {
     }
 
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(96, 57, 19));
+    const bool disabled = (ds->itemState & ODS_DISABLED) != 0;
+    SetTextColor(dc, disabled ? RGB(122, 122, 122) : RGB(96, 57, 19));
 
     wchar_t txt[128] = {};
     GetWindowText(ds->hwndItem, txt, 128);
@@ -385,6 +463,8 @@ void DrawButtonItem(const DRAWITEMSTRUCT* ds) {
     if (down) {
         rc.left++; rc.right++; rc.top++; rc.bottom++;
     }
+    rc.left += 4;
+    rc.right -= 4;
     DrawTextW(dc, txt, -1, &rc, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
 }
 
@@ -394,8 +474,10 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return HTCAPTION;  // Makes the window draggable by treating the client area as the title bar.
     case WM_CREATE: {
         g_hCustomFont = LoadOblivionFontFromFile(18.0f, false);
+        DetectConstructionSetLaunchTarget();
+
         int xPos = WINDOW_WIDTH - BUTTON_WIDTH - 128 - EXTRA_LEFT_SHIFT;
-        int totalBtns = 5;
+        int totalBtns = 6;
         int totalHeight = totalBtns * BUTTON_HEIGHT + (totalBtns - 1) * BUTTON_SPACING;
         int startY = (WINDOW_HEIGHT - totalHeight) / 2;
         auto makeBtn = [&](const wchar_t* text, int id, int idx) {
@@ -419,16 +501,42 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             SetWindowSubclass(hBtn, HoverBtnSubProc, 1, 0);
             };
         makeBtn(L"Play", ID_BUTTON_PLAY, 0);
-        makeBtn(L"Options", ID_BUTTON_OPTIONS, 1);
-        makeBtn(L"Data Files", ID_BUTTON_DATAFILES, 2);
-        makeBtn(L"Support", ID_BUTTON_TECHSUPPORT, 3);
-        makeBtn(L"Exit", ID_BUTTON_EXIT, 4);
+        const wchar_t* cseText = (g_csLaunchMode == ConstructionSetLaunchMode::Batch) ? L"Launch CSE" : L"Launch CS";
+        g_hLaunchCseButton = CreateWindowW(
+            L"BUTTON",
+            cseText,
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            xPos - (CSE_BUTTON_EXTRA_WIDTH / 2),
+            startY + 1 * (BUTTON_HEIGHT + BUTTON_SPACING),
+            BUTTON_WIDTH + CSE_BUTTON_EXTRA_WIDTH,
+            BUTTON_HEIGHT,
+            hWnd,
+            (HMENU)(INT_PTR)ID_BUTTON_LAUNCH_CSE,
+            g_hInstance,
+            nullptr
+        );
+        if (g_hCustomFont && g_hLaunchCseButton) {
+            SendMessage(g_hLaunchCseButton, WM_SETFONT, (WPARAM)g_hCustomFont, TRUE);
+        }
+        SetWindowTheme(g_hLaunchCseButton, L"", L"");
+        SetWindowSubclass(g_hLaunchCseButton, HoverBtnSubProc, 1, 0);
+        if (g_csLaunchMode == ConstructionSetLaunchMode::None && g_hLaunchCseButton) {
+            EnableWindow(g_hLaunchCseButton, FALSE);
+        }
+
+        makeBtn(L"Options", ID_BUTTON_OPTIONS, 2);
+        makeBtn(L"Data Files", ID_BUTTON_DATAFILES, 3);
+        makeBtn(L"Support", ID_BUTTON_TECHSUPPORT, 4);
+        makeBtn(L"Exit", ID_BUTTON_EXIT, 5);
         return 0;
     }
     case WM_COMMAND: {
         switch (LOWORD(wParam)) {
         case ID_BUTTON_PLAY:
             LaunchObseLoader();
+            return 0;
+        case ID_BUTTON_LAUNCH_CSE:
+            LaunchConstructionSet();
             return 0;
         case ID_BUTTON_OPTIONS:
             OpenOptionsWindow(hWnd);
