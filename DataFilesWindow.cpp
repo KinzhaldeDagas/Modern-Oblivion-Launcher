@@ -66,8 +66,16 @@ static void UpdateHallOfFameTitle(HWND hwnd) {
     }
 
     gHallOfFameIndex = nextIndex;
-    const std::wstring text = L"[HALL OF FAME: " + kHallOfFame[(size_t)gHallOfFameIndex] + L"] Oblivion: Data Files.";
+    const std::wstring text = kHallOfFame[(size_t)gHallOfFameIndex] + L" Oblivion: Data Files";
     SetWindowTextW(hwnd, text.c_str());
+}
+
+static std::wstring GetPluginDisplayName(const std::wstring& pluginFileName) {
+    const wchar_t* ext = PathFindExtensionW(pluginFileName.c_str());
+    if (!ext || ext == pluginFileName.c_str()) {
+        return pluginFileName;
+    }
+    return pluginFileName.substr(0, static_cast<size_t>(ext - pluginFileName.c_str()));
 }
 
 static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
@@ -226,7 +234,7 @@ static void UpdatePluginDetails(int selectedIndex) {
     }
 
     const std::wstring& plugin = pluginFiles[(size_t)selectedIndex];
-    SetWindowTextW(hPluginName, plugin.c_str());
+    SetWindowTextW(hPluginName, GetPluginDisplayName(plugin).c_str());
 
     PluginHeaderMetadata meta = {};
     ReadPluginHeaderMetadata(plugin, &meta);
@@ -406,7 +414,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         InitCommonControlsEx(&icex);
 
         g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        g_hTitleFont = CreateUiFont(13, FW_BOLD);
+        g_hTitleFont = CreateUiFont(13, FW_NORMAL);
         g_hMetaFont = CreateUiFont(10, FW_NORMAL);
 
         const int leftX = 18;
@@ -417,7 +425,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         const int rightX = 378;
         const int rightW = 288;
         const int pluginNameY = 22;
-        const int authorY = 54;
+        const int authorY = 72;
         const int descriptionY = 84;
         const int descriptionH = 330;
         const int createdOnY = 424;
