@@ -13,6 +13,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #pragma comment(lib, "comctl32.lib")
@@ -333,8 +334,57 @@ static bool IsMasterPlugin(const std::wstring& pluginName, const PluginHeaderMet
     return ext && _wcsicmp(ext, L".esm") == 0;
 }
 
+struct PluginTimeSnapshot {
+    std::wstring plugin;
+    FILETIME lastWriteTime = {};
+};
+
+static bool CapturePluginWriteTimes(const std::vector<std::wstring>& pluginNames, std::vector<PluginTimeSnapshot>* outSnapshots) {
+    if (!outSnapshots) return false;
+    outSnapshots->clear();
+    outSnapshots->reserve(pluginNames.size());
+
+    for (const std::wstring& plugin : pluginNames) {
+        WIN32_FILE_ATTRIBUTE_DATA attrs = {};
+        if (!GetFileAttributesExW(JoinPath(dataPath, plugin).c_str(), GetFileExInfoStandard, &attrs)) {
+            return false;
+        }
+
+        PluginTimeSnapshot snapshot = {};
+        snapshot.plugin = plugin;
+        snapshot.lastWriteTime = attrs.ftLastWriteTime;
+        outSnapshots->push_back(snapshot);
+    }
+
+    return true;
+}
+
+static bool RestorePluginWriteTimes(const std::vector<PluginTimeSnapshot>& snapshots) {
+    for (const PluginTimeSnapshot& snapshot : snapshots) {
+        const std::wstring path = JoinPath(dataPath, snapshot.plugin);
+        HANDLE file = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (file == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+
+        const BOOL ok = SetFileTime(file, NULL, NULL, &snapshot.lastWriteTime);
+        CloseHandle(file);
+        if (!ok) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool SetPluginTimestampByOrder(const std::vector<std::wstring>& orderedPlugins) {
     if (orderedPlugins.empty()) return true;
+
+    std::vector<PluginTimeSnapshot> originalTimes;
+    if (!CapturePluginWriteTimes(orderedPlugins, &originalTimes)) {
+        return false;
+    }
 
     SYSTEMTIME st = {};
     st.wYear = 2006;
@@ -356,12 +406,14 @@ static bool SetPluginTimestampByOrder(const std::vector<std::wstring>& orderedPl
 
     const ULONGLONG oneSecond = 10ULL * 1000ULL * 1000ULL;
 
+    bool success = true;
     for (size_t i = 0; i < orderedPlugins.size(); ++i) {
         const std::wstring path = JoinPath(dataPath, orderedPlugins[i]);
         HANDLE file = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         if (file == INVALID_HANDLE_VALUE) {
-            return false;
+            success = false;
+            break;
         }
 
         ULARGE_INTEGER ts = {};
@@ -373,22 +425,35 @@ static bool SetPluginTimestampByOrder(const std::vector<std::wstring>& orderedPl
         const BOOL ok = SetFileTime(file, NULL, NULL, &ft);
         CloseHandle(file);
         if (!ok) {
-            return false;
+            success = false;
+            break;
         }
+    }
+
+    if (!success) {
+        RestorePluginWriteTimes(originalTimes);
+        return false;
     }
 
     return true;
 }
 
+
 static void SortPluginsSuggestedLoadOrder() {
     if (!hPluginList || pluginFiles.empty()) return;
 
     std::map<std::wstring, bool> checkStateByPlugin;
+    std::wstring selectedPluginLower;
     const int itemCount = ListView_GetItemCount(hPluginList);
     for (int i = 0; i < itemCount; ++i) {
         wchar_t buffer[MAX_PATH] = {};
         ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
         checkStateByPlugin[ToLowerCopy(buffer)] = ListView_GetCheckState(hPluginList, i) != FALSE;
+
+        const UINT state = ListView_GetItemState(hPluginList, i, LVIS_SELECTED);
+        if ((state & LVIS_SELECTED) != 0) {
+            selectedPluginLower = ToLowerCopy(buffer);
+        }
     }
 
     std::unordered_map<std::wstring, size_t> indexByName;
@@ -398,8 +463,11 @@ static void SortPluginsSuggestedLoadOrder() {
     }
 
     std::vector<PluginHeaderMetadata> metadata(pluginFiles.size());
+    bool hadMetadataReadFailure = false;
     for (size_t i = 0; i < pluginFiles.size(); ++i) {
-        ReadPluginHeaderMetadata(pluginFiles[i], &metadata[i]);
+        if (!ReadPluginHeaderMetadata(pluginFiles[i], &metadata[i])) {
+            hadMetadataReadFailure = true;
+        }
     }
 
     std::vector<std::vector<size_t>> edges(pluginFiles.size());
@@ -413,23 +481,35 @@ static void SortPluginsSuggestedLoadOrder() {
         indegree[to] += 1;
     };
 
+    std::vector<std::wstring> unresolvedMasters;
+    unresolvedMasters.reserve(pluginFiles.size());
+
     for (size_t i = 0; i < pluginFiles.size(); ++i) {
         for (const std::wstring& master : metadata[i].masters) {
             auto it = indexByName.find(ToLowerCopy(master));
             if (it != indexByName.end()) {
                 addEdge(it->second, i);
+            } else {
+                unresolvedMasters.push_back(pluginFiles[i] + L" -> " + master);
             }
         }
     }
 
+    std::vector<size_t> masterIndices;
+    std::vector<size_t> nonMasterIndices;
+    masterIndices.reserve(pluginFiles.size());
+    nonMasterIndices.reserve(pluginFiles.size());
     for (size_t i = 0; i < pluginFiles.size(); ++i) {
-        const bool iMaster = IsMasterPlugin(pluginFiles[i], metadata[i]);
-        for (size_t j = 0; j < pluginFiles.size(); ++j) {
-            if (i == j) continue;
-            const bool jMaster = IsMasterPlugin(pluginFiles[j], metadata[j]);
-            if (iMaster && !jMaster) {
-                addEdge(i, j);
-            }
+        if (IsMasterPlugin(pluginFiles[i], metadata[i])) {
+            masterIndices.push_back(i);
+        } else {
+            nonMasterIndices.push_back(i);
+        }
+    }
+
+    for (size_t masterIdx : masterIndices) {
+        for (size_t pluginIdx : nonMasterIndices) {
+            addEdge(masterIdx, pluginIdx);
         }
     }
 
@@ -468,6 +548,20 @@ static void SortPluginsSuggestedLoadOrder() {
         return;
     }
 
+    if (!unresolvedMasters.empty()) {
+        MessageBoxW(NULL,
+            L"One or more masters referenced by plugins were not found in the current Data Files list.\n"
+            L"Sorting continued using available dependency information.",
+            L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
+    }
+
+    if (hadMetadataReadFailure) {
+        MessageBoxW(NULL,
+            L"Some plugin headers could not be parsed completely.\n"
+            L"Sorting used fallback rules for those files.",
+            L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
+    }
+
     std::vector<std::wstring> reordered;
     reordered.reserve(order.size());
     for (size_t idx : order) {
@@ -485,16 +579,29 @@ static void SortPluginsSuggestedLoadOrder() {
     PopulatePluginList(hPluginList);
 
     const int newCount = ListView_GetItemCount(hPluginList);
+    int selectedIndex = -1;
     for (int i = 0; i < newCount; ++i) {
         wchar_t buffer[MAX_PATH] = {};
         ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
-        auto it = checkStateByPlugin.find(ToLowerCopy(buffer));
+        const std::wstring lowered = ToLowerCopy(buffer);
+
+        auto it = checkStateByPlugin.find(lowered);
         if (it != checkStateByPlugin.end()) {
             ListView_SetCheckState(hPluginList, i, it->second ? TRUE : FALSE);
         }
+
+        if (!selectedPluginLower.empty() && lowered == selectedPluginLower) {
+            selectedIndex = i;
+        }
     }
 
-    SelectFirstPlugin();
+    if (selectedIndex >= 0) {
+        ListView_SetItemState(hPluginList, selectedIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_EnsureVisible(hPluginList, selectedIndex, FALSE);
+        UpdatePluginDetails(selectedIndex);
+    } else {
+        SelectFirstPlugin();
+    }
 }
 
 
