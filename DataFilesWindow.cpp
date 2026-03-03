@@ -36,6 +36,39 @@ static HWND hModifiedOn = NULL;
 
 static std::wstring dataPath;
 static HFONT g_hCommonFont = NULL;
+static HFONT g_hTitleFont = NULL;
+static HFONT g_hMetaFont = NULL;
+
+static const std::vector<std::wstring> kHallOfFame = {
+    L"Daggers", L"Alenet", L"llde", L"ponyrider0", L"gbr", L"shademe"
+};
+static int gHallOfFameIndex = -1;
+static uint32_t gHallOfFameRngState = 0;
+
+static uint32_t NextRandomU32() {
+    if (gHallOfFameRngState == 0) {
+        gHallOfFameRngState = (uint32_t)GetTickCount() ^ (uint32_t)GetCurrentProcessId() ^ 0xA341316Cu;
+    }
+    gHallOfFameRngState ^= gHallOfFameRngState << 13;
+    gHallOfFameRngState ^= gHallOfFameRngState >> 17;
+    gHallOfFameRngState ^= gHallOfFameRngState << 5;
+    return gHallOfFameRngState;
+}
+
+static void UpdateHallOfFameTitle(HWND hwnd) {
+    if (!hwnd || kHallOfFame.empty()) return;
+
+    int nextIndex = 0;
+    if (kHallOfFame.size() > 1) {
+        do {
+            nextIndex = (int)(NextRandomU32() % (uint32_t)kHallOfFame.size());
+        } while (nextIndex == gHallOfFameIndex);
+    }
+
+    gHallOfFameIndex = nextIndex;
+    const std::wstring text = L"[HALL OF FAME: " + kHallOfFame[(size_t)gHallOfFameIndex] + L"] Oblivion: Data Files.";
+    SetWindowTextW(hwnd, text.c_str());
+}
 
 static const std::vector<std::wstring> kHallOfFame = {
     L"Daggers", L"Alenet", L"llde", L"ponyrider0", L"gbr", L"shademe"
@@ -106,6 +139,19 @@ static void SetCommonFont(HWND hwnd) {
     if (hwnd && g_hCommonFont) {
         SendMessageW(hwnd, WM_SETFONT, (WPARAM)g_hCommonFont, TRUE);
     }
+}
+
+static HFONT CreateUiFont(int pointSize, int weight) {
+    HDC hdc = GetDC(NULL);
+    const int dpiY = hdc ? GetDeviceCaps(hdc, LOGPIXELSY) : 96;
+    if (hdc) ReleaseDC(NULL, hdc);
+
+    LOGFONTW lf = {};
+    lf.lfHeight = -MulDiv(pointSize, dpiY, 72);
+    lf.lfWeight = weight;
+    lf.lfQuality = CLEARTYPE_QUALITY;
+    wcscpy_s(lf.lfFaceName, L"Segoe UI");
+    return CreateFontIndirectW(&lf);
 }
 
 static std::wstring GetPluginsTxtPath() {
@@ -391,31 +437,47 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         InitCommonControlsEx(&icex);
 
         g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        g_hTitleFont = CreateUiFont(13, FW_BOLD);
+        g_hMetaFont = CreateUiFont(10, FW_NORMAL);
+
+        const int leftX = 18;
+        const int topY = 18;
+        const int leftW = 348;
+        const int listH = 498;
+
+        const int rightX = 378;
+        const int rightW = 288;
+        const int pluginNameY = 22;
+        const int authorY = 54;
+        const int descriptionY = 84;
+        const int descriptionH = 330;
+        const int createdOnY = 424;
+        const int modifiedOnY = 450;
 
         hPluginList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, NULL,
             WS_VISIBLE | WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER,
-            18, 18, 348, 498,
+            leftX, topY, leftW, listH,
             hwnd, (HMENU)IDC_PLUGIN_LIST, NULL, NULL);
 
         hHallOfFame = CreateWindowW(L"STATIC", L"Hall of Fame:", WS_VISIBLE | WS_CHILD,
             378, 18, 288, 24, hwnd, NULL, NULL, NULL);
 
         hPluginName = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD,
-            378, 44, 288, 24, hwnd, NULL, NULL, NULL);
+            rightX, pluginNameY, rightW, 26, hwnd, NULL, NULL, NULL);
 
         hCreatedBy = CreateWindowW(L"STATIC", L"Created by: Unknown", WS_VISIBLE | WS_CHILD,
-            378, 70, 288, 24, hwnd, NULL, NULL, NULL);
+            rightX, authorY, rightW, 22, hwnd, NULL, NULL, NULL);
 
         hDescription = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
             WS_VISIBLE | WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,
-            378, 98, 288, 316,
+            rightX, descriptionY, rightW, descriptionH,
             hwnd, (HMENU)IDC_DESCRIPTION_EDIT, NULL, NULL);
 
         hCreatedOn = CreateWindowW(L"STATIC", L"Created on: Unknown", WS_VISIBLE | WS_CHILD,
-            378, 426, 288, 24, hwnd, NULL, NULL, NULL);
+            rightX, createdOnY, rightW, 22, hwnd, NULL, NULL, NULL);
 
         hModifiedOn = CreateWindowW(L"STATIC", L"Last modified: Unknown", WS_VISIBLE | WS_CHILD,
-            378, 452, 288, 24, hwnd, NULL, NULL, NULL);
+            rightX, modifiedOnY, rightW, 22, hwnd, NULL, NULL, NULL);
 
         HWND hReset = CreateWindowW(L"BUTTON", L"Reset to Defaults", WS_VISIBLE | WS_CHILD,
             18, 530, 288, 36,
@@ -437,12 +499,17 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         }
 
         SetCommonFont(hPluginList);
-        SetCommonFont(hHallOfFame);
-        SetCommonFont(hPluginName);
-        SetCommonFont(hCreatedBy);
         SetCommonFont(hDescription);
-        SetCommonFont(hCreatedOn);
-        SetCommonFont(hModifiedOn);
+        if (g_hTitleFont) SendMessageW(hPluginName, WM_SETFONT, (WPARAM)g_hTitleFont, TRUE); else SetCommonFont(hPluginName);
+        if (g_hMetaFont) {
+            SendMessageW(hCreatedBy, WM_SETFONT, (WPARAM)g_hMetaFont, TRUE);
+            SendMessageW(hCreatedOn, WM_SETFONT, (WPARAM)g_hMetaFont, TRUE);
+            SendMessageW(hModifiedOn, WM_SETFONT, (WPARAM)g_hMetaFont, TRUE);
+        } else {
+            SetCommonFont(hCreatedBy);
+            SetCommonFont(hCreatedOn);
+            SetCommonFont(hModifiedOn);
+        }
         SetCommonFont(hReset);
         SetCommonFont(hCancel);
         SetCommonFont(hOk);
@@ -509,6 +576,8 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         hDescription = NULL;
         hCreatedOn = NULL;
         hModifiedOn = NULL;
+        if (g_hTitleFont) { DeleteObject(g_hTitleFont); g_hTitleFont = NULL; }
+        if (g_hMetaFont) { DeleteObject(g_hMetaFont); g_hMetaFont = NULL; }
         g_hCommonFont = NULL;
         gHallOfFameIndex = -1;
         gHallOfFameRngState = 0;
