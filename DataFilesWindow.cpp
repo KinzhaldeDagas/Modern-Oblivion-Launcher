@@ -53,8 +53,8 @@ static uint32_t NextRandomU32() {
     return gHallOfFameRngState;
 }
 
-static void UpdateHallOfFameLabel() {
-    if (!hHallOfFame || kHallOfFame.empty()) return;
+static void UpdateHallOfFameTitle(HWND hwnd) {
+    if (!hwnd || kHallOfFame.empty()) return;
 
     int nextIndex = 0;
     if (kHallOfFame.size() > 1) {
@@ -64,8 +64,8 @@ static void UpdateHallOfFameLabel() {
     }
 
     gHallOfFameIndex = nextIndex;
-    const std::wstring text = L"Hall of Fame: " + kHallOfFame[(size_t)gHallOfFameIndex];
-    SetWindowTextW(hHallOfFame, text.c_str());
+    const std::wstring text = L"[HALL OF FAME: " + kHallOfFame[(size_t)gHallOfFameIndex] + L"] Oblivion: Data Files.";
+    SetWindowTextW(hwnd, text.c_str());
 }
 
 static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
@@ -392,15 +392,9 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
         g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
-        HWND hDataFilesLabel = CreateWindowW(L"STATIC", L"Data Files:", WS_VISIBLE | WS_CHILD,
-            18, 18, 100, 22, hwnd, NULL, NULL, NULL);
-
-        HWND hLeftFrame = CreateWindowW(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_GROUPBOX,
-            18, 42, 348, 474, hwnd, NULL, NULL, NULL);
-
         hPluginList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, NULL,
             WS_VISIBLE | WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER,
-            28, 56, 338, 434,
+            18, 18, 348, 498,
             hwnd, (HMENU)IDC_PLUGIN_LIST, NULL, NULL);
 
         hHallOfFame = CreateWindowW(L"STATIC", L"Hall of Fame:", WS_VISIBLE | WS_CHILD,
@@ -435,15 +429,13 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             524, 530, 136, 36,
             hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
 
-        if (!hDataFilesLabel || !hLeftFrame || !hPluginList || !hHallOfFame || !hPluginName || !hCreatedBy ||
+        if (!hPluginList || !hPluginName || !hCreatedBy ||
             !hDescription || !hCreatedOn || !hModifiedOn || !hReset || !hCancel || !hOk) {
             MessageBoxW(hwnd, L"Failed to create Data Files controls.", L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
             DestroyWindow(hwnd);
             return -1;
         }
 
-        SetCommonFont(hDataFilesLabel);
-        SetCommonFont(hLeftFrame);
         SetCommonFont(hPluginList);
         SetCommonFont(hHallOfFame);
         SetCommonFont(hPluginName);
@@ -458,14 +450,14 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         ListView_SetExtendedListViewStyle(hPluginList, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
         LVCOLUMNW col = {};
         col.mask = LVCF_WIDTH;
-        col.cx = 318;
+        col.cx = 326;
         ListView_InsertColumn(hPluginList, 0, &col);
 
         PopulatePluginList(hPluginList);
         SelectFirstPlugin();
 
         gHallOfFameRngState = (uint32_t)GetTickCount() ^ (uint32_t)GetCurrentProcessId() ^ 0xC2B2AE35u;
-        UpdateHallOfFameLabel();
+        UpdateHallOfFameTitle(hwnd);
         SetTimer(hwnd, IDT_HALL_OF_FAME, 5000, NULL);
         return 0;
     }
@@ -484,7 +476,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
     case WM_TIMER:
         if (wParam == IDT_HALL_OF_FAME) {
-            UpdateHallOfFameLabel();
+            UpdateHallOfFameTitle(hwnd);
             return 0;
         }
         break;
