@@ -23,6 +23,7 @@ using namespace Gdiplus;
 
 #define WINDOW_WIDTH 900
 #define WINDOW_HEIGHT 550
+#define WINDOW_BOTTOM_PADDING 4
 #define BUTTON_WIDTH 150
 #define BUTTON_HEIGHT 35
 #define BUTTON_SPACING 20
@@ -609,15 +610,17 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
 
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
+    const int windowHeight = WINDOW_HEIGHT + WINDOW_BOTTOM_PADDING;
+
     HWND hWnd = CreateWindowEx(
         WS_EX_APPWINDOW,
         clsName,
         L"Oblivion-Style Launcher",
         WS_POPUP,
         (sw - WINDOW_WIDTH) / 2,
-        (sh - WINDOW_HEIGHT) / 2,
+        (sh - windowHeight) / 2,
         WINDOW_WIDTH,
-        WINDOW_HEIGHT,
+        windowHeight,
         nullptr,
         nullptr,
         hInst,
