@@ -87,6 +87,7 @@ static HWND gUseEyeEnvMappingCheck = nullptr;
 static HWND gUseBlurShaderCheck = nullptr;
 static HWND gWaterHiResCheck = nullptr;
 static HWND gActorSelfShadowingCheck = nullptr;
+static HWND gCloseLauncherOnLaunchCheck = nullptr;
 
 static HWND gResCombo = nullptr;
 static HWND gWinModeCombo = nullptr;
@@ -222,6 +223,7 @@ static const int IDC_ALWAYSRUN = 1603;
 
 static const int IDC_DISABLE_BORDER = 1700;
 static const int IDC_ENABLE_CS_BUTTON = 1701;
+static const int IDC_CLOSE_ON_LAUNCH = 1702;
 
 static const int IDC_DEV_ALLOWSCREENSHOT = 1900;
 static const int IDC_DEV_FILELOGGING = 1901;
@@ -1303,6 +1305,8 @@ static void ApplyControlsToINI()
         (SendMessageW(gDisableBorderRegionsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 0 : 1);
     WriteINIInt(L"Launcher", L"bEnableConstructionSetButton",
         (SendMessageW(gEnableConstructionSetButtonCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
+    WriteINIInt(L"Launcher", L"bCloseOnLaunch",
+        (SendMessageW(gCloseLauncherOnLaunchCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
 
     WriteINIInt(L"Display", L"bAllowScreenShot", (SendMessageW(gDevAllowScreenshotCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
     WriteINIInt(L"Messages", L"iFileLogging", (SendMessageW(gDevFileLoggingCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
@@ -1707,6 +1711,8 @@ static void LoadFromINI()
     SendMessageW(gDisableBorderRegionsCheck, BM_SETCHECK, (ber == 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gEnableConstructionSetButtonCheck, BM_SETCHECK,
         GetINIInt(L"Launcher", L"bEnableConstructionSetButton", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gCloseLauncherOnLaunchCheck, BM_SETCHECK,
+        GetINIInt(L"Launcher", L"bCloseOnLaunch", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SendMessageW(gDevAllowScreenshotCheck, BM_SETCHECK, GetINIInt(L"Display", L"bAllowScreenShot", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gDevFileLoggingCheck, BM_SETCHECK, GetINIInt(L"Messages", L"iFileLogging", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -2262,7 +2268,7 @@ static void BuildUI(HWND hwnd)
 
     // GAMEPLAY
     {
-        const int gbH = sx(146);
+        const int gbH = sx(174);
         CreateGroupBox(gContent, L"Gameplay", pad, y, contentW, gbH);
 
         int ry = y + sx(28);
@@ -2275,6 +2281,12 @@ static void BuildUI(HWND hwnd)
         ry += rowH + rowGap;
         gEnableConstructionSetButtonCheck = CreateCheckbox(gContent, L"Enable Construction Set button?", IDC_ENABLE_CS_BUTTON,
             LxLabel, AlignLabelY(ry) - sx(2), sx(320), sx(20));
+
+        ry += rowH + rowGap;
+        gCloseLauncherOnLaunchCheck = CreateCheckbox(gContent,
+            L"Close launcher after Play / Launch CS/CSE",
+            IDC_CLOSE_ON_LAUNCH,
+            LxLabel, AlignLabelY(ry) - sx(2), sx(420), sx(20));
 
         y += gbH + sx(12);
     }

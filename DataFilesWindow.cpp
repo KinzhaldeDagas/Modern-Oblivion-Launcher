@@ -5,10 +5,17 @@
 #include "DataFilesWindow.h"
 
 #include <algorithm>
+#include <functional>
+#include <queue>
+#include <unordered_map>
 #include <cstdint>
+#include <cwctype>
 #include <fstream>
+#include <map>
 #include <string>
+#include <tuple>
 #include <vector>
+#include <iomanip>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
@@ -18,8 +25,11 @@
 #define IDC_OK_BUTTON        1002
 #define IDC_CANCEL_BUTTON    1003
 #define IDC_RESET_BUTTON     1004
-#define IDC_DESCRIPTION_EDIT 1005
+#define IDC_SORT_BUTTON      1005
+#define IDC_DESCRIPTION_EDIT 1006
 #define IDT_HALL_OF_FAME   2001
+
+void PopulatePluginList(HWND hwndList);
 
 namespace {
 
@@ -66,8 +76,16 @@ static void UpdateHallOfFameTitle(HWND hwnd) {
     }
 
     gHallOfFameIndex = nextIndex;
-    const std::wstring text = L"[HALL OF FAME: " + kHallOfFame[(size_t)gHallOfFameIndex] + L"] Oblivion: Data Files.";
+    const std::wstring text = kHallOfFame[(size_t)gHallOfFameIndex] + L" Oblivion: Data Files";
     SetWindowTextW(hwnd, text.c_str());
+}
+
+static std::wstring GetPluginDisplayName(const std::wstring& pluginFileName) {
+    const wchar_t* ext = PathFindExtensionW(pluginFileName.c_str());
+    if (!ext || ext == pluginFileName.c_str()) {
+        return pluginFileName;
+    }
+    return pluginFileName.substr(0, static_cast<size_t>(ext - pluginFileName.c_str()));
 }
 
 static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
@@ -77,8 +95,37 @@ static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     return a + L"\\" + b;
 }
 
+static std::wstring GetExeDir() {
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(NULL, path, MAX_PATH);
+    PathRemoveFileSpecW(path);
+    return path;
+}
+
+static void AppendDataFilesSortLog(const std::wstring& message) {
+    const std::wstring logPath = JoinPath(GetExeDir(), L"DataFilesSort.log");
+    std::wofstream out(logPath, std::ios::app);
+    if (!out) return;
+
+    SYSTEMTIME now = {};
+    GetLocalTime(&now);
+    out << L"[" << now.wYear << L"-" << std::setw(2) << std::setfill(L'0') << now.wMonth
+        << L"-" << std::setw(2) << now.wDay
+        << L" " << std::setw(2) << now.wHour << L":" << std::setw(2) << now.wMinute
+        << L":" << std::setw(2) << now.wSecond << L"] "
+        << message << std::endl;
+}
+
 static bool EqualsNoCase(const std::wstring& a, const std::wstring& b) {
     return _wcsicmp(a.c_str(), b.c_str()) == 0;
+}
+
+static std::wstring ToLowerCopy(const std::wstring& value) {
+    std::wstring lowered = value;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](wchar_t c) {
+        return (wchar_t)towlower(c);
+    });
+    return lowered;
 }
 
 static bool IsPluginFile(const std::wstring& fileName) {
@@ -139,6 +186,7 @@ struct PluginHeaderMetadata {
     std::wstring author;
     std::wstring description;
     std::vector<std::wstring> masters;
+    bool isMasterFlagged = false;
 };
 
 static uint16_t ReadU16LE(const unsigned char* p) {
@@ -177,6 +225,9 @@ static bool ReadPluginHeaderMetadata(const std::wstring& pluginName, PluginHeade
     if (dataSize == 0 || dataSize > (16u * 1024u * 1024u)) {
         return false;
     }
+
+    const uint32_t recordFlags = ReadU32LE(&recordHeader[8]);
+    outMeta->isMasterFlagged = (recordFlags & 0x00000001u) != 0;
 
     std::vector<unsigned char> data(dataSize);
     f.read(reinterpret_cast<char*>(data.data()), (std::streamsize)data.size());
@@ -226,7 +277,7 @@ static void UpdatePluginDetails(int selectedIndex) {
     }
 
     const std::wstring& plugin = pluginFiles[(size_t)selectedIndex];
-    SetWindowTextW(hPluginName, plugin.c_str());
+    SetWindowTextW(hPluginName, GetPluginDisplayName(plugin).c_str());
 
     PluginHeaderMetadata meta = {};
     ReadPluginHeaderMetadata(plugin, &meta);
@@ -298,6 +349,308 @@ static void ResetToDefaults() {
         }
     }
 }
+
+static bool IsMasterPlugin(const std::wstring& pluginName, const PluginHeaderMetadata& meta) {
+    if (meta.isMasterFlagged) return true;
+    const wchar_t* ext = PathFindExtensionW(pluginName.c_str());
+    return ext && _wcsicmp(ext, L".esm") == 0;
+}
+
+struct PluginTimeSnapshot {
+    std::wstring plugin;
+    FILETIME lastWriteTime = {};
+};
+
+static bool CapturePluginWriteTimes(const std::vector<std::wstring>& pluginNames, std::vector<PluginTimeSnapshot>* outSnapshots) {
+    if (!outSnapshots) return false;
+    outSnapshots->clear();
+    outSnapshots->reserve(pluginNames.size());
+
+    for (const std::wstring& plugin : pluginNames) {
+        WIN32_FILE_ATTRIBUTE_DATA attrs = {};
+        if (!GetFileAttributesExW(JoinPath(dataPath, plugin).c_str(), GetFileExInfoStandard, &attrs)) {
+            return false;
+        }
+
+        PluginTimeSnapshot snapshot = {};
+        snapshot.plugin = plugin;
+        snapshot.lastWriteTime = attrs.ftLastWriteTime;
+        outSnapshots->push_back(snapshot);
+    }
+
+    return true;
+}
+
+static bool RestorePluginWriteTimes(const std::vector<PluginTimeSnapshot>& snapshots) {
+    for (const PluginTimeSnapshot& snapshot : snapshots) {
+        const std::wstring path = JoinPath(dataPath, snapshot.plugin);
+        HANDLE file = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (file == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+
+        const BOOL ok = SetFileTime(file, NULL, NULL, &snapshot.lastWriteTime);
+        CloseHandle(file);
+        if (!ok) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+enum class TimestampApplyResult {
+    Success,
+    FailedRestored,
+    FailedRestoreError
+};
+
+static TimestampApplyResult SetPluginTimestampByOrder(const std::vector<std::wstring>& orderedPlugins) {
+    if (orderedPlugins.empty()) return TimestampApplyResult::Success;
+
+    std::vector<PluginTimeSnapshot> originalTimes;
+    if (!CapturePluginWriteTimes(orderedPlugins, &originalTimes)) {
+        return TimestampApplyResult::FailedRestored;
+    }
+
+    SYSTEMTIME st = {};
+    st.wYear = 2006;
+    st.wMonth = 1;
+    st.wDay = 1;
+    st.wHour = 0;
+    st.wMinute = 0;
+    st.wSecond = 0;
+    st.wMilliseconds = 0;
+
+    FILETIME baseUtc = {};
+    if (!SystemTimeToFileTime(&st, &baseUtc)) {
+        return TimestampApplyResult::FailedRestored;
+    }
+
+    ULARGE_INTEGER tick = {};
+    tick.LowPart = baseUtc.dwLowDateTime;
+    tick.HighPart = baseUtc.dwHighDateTime;
+
+    const ULONGLONG oneSecond = 10ULL * 1000ULL * 1000ULL;
+
+    bool success = true;
+    for (size_t i = 0; i < orderedPlugins.size(); ++i) {
+        const std::wstring path = JoinPath(dataPath, orderedPlugins[i]);
+        HANDLE file = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (file == INVALID_HANDLE_VALUE) {
+            success = false;
+            break;
+        }
+
+        ULARGE_INTEGER ts = {};
+        ts.QuadPart = tick.QuadPart + (ULONGLONG)i * oneSecond;
+        FILETIME ft = {};
+        ft.dwLowDateTime = ts.LowPart;
+        ft.dwHighDateTime = ts.HighPart;
+
+        const BOOL ok = SetFileTime(file, NULL, NULL, &ft);
+        CloseHandle(file);
+        if (!ok) {
+            success = false;
+            break;
+        }
+    }
+
+    if (!success) {
+        const bool restored = RestorePluginWriteTimes(originalTimes);
+        return restored ? TimestampApplyResult::FailedRestored : TimestampApplyResult::FailedRestoreError;
+    }
+
+    return TimestampApplyResult::Success;
+}
+
+
+static void SortPluginsSuggestedLoadOrder() {
+    if (!hPluginList || pluginFiles.empty()) return;
+
+    AppendDataFilesSortLog(L"Sort requested for " + std::to_wstring(pluginFiles.size()) + L" plugins.");
+
+    std::map<std::wstring, bool> checkStateByPlugin;
+    std::wstring selectedPluginLower;
+    const int itemCount = ListView_GetItemCount(hPluginList);
+    for (int i = 0; i < itemCount; ++i) {
+        wchar_t buffer[MAX_PATH] = {};
+        ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
+        checkStateByPlugin[ToLowerCopy(buffer)] = ListView_GetCheckState(hPluginList, i) != FALSE;
+
+        const UINT state = ListView_GetItemState(hPluginList, i, LVIS_SELECTED);
+        if ((state & LVIS_SELECTED) != 0) {
+            selectedPluginLower = ToLowerCopy(buffer);
+        }
+    }
+
+    std::unordered_map<std::wstring, size_t> indexByName;
+    indexByName.reserve(pluginFiles.size());
+    for (size_t i = 0; i < pluginFiles.size(); ++i) {
+        indexByName[ToLowerCopy(pluginFiles[i])] = i;
+    }
+
+    std::vector<PluginHeaderMetadata> metadata(pluginFiles.size());
+    bool hadMetadataReadFailure = false;
+    for (size_t i = 0; i < pluginFiles.size(); ++i) {
+        if (!ReadPluginHeaderMetadata(pluginFiles[i], &metadata[i])) {
+            hadMetadataReadFailure = true;
+        }
+    }
+
+    std::vector<std::vector<size_t>> edges(pluginFiles.size());
+    std::vector<int> indegree(pluginFiles.size(), 0);
+
+    auto addEdge = [&](size_t from, size_t to) {
+        if (from == to) return;
+        auto& row = edges[from];
+        if (std::find(row.begin(), row.end(), to) != row.end()) return;
+        row.push_back(to);
+        indegree[to] += 1;
+    };
+
+    std::vector<std::wstring> unresolvedMasters;
+    unresolvedMasters.reserve(pluginFiles.size());
+
+    for (size_t i = 0; i < pluginFiles.size(); ++i) {
+        for (const std::wstring& master : metadata[i].masters) {
+            auto it = indexByName.find(ToLowerCopy(master));
+            if (it != indexByName.end()) {
+                addEdge(it->second, i);
+            } else {
+                unresolvedMasters.push_back(pluginFiles[i] + L" -> " + master);
+            }
+        }
+    }
+
+    std::vector<size_t> masterIndices;
+    std::vector<size_t> nonMasterIndices;
+    masterIndices.reserve(pluginFiles.size());
+    nonMasterIndices.reserve(pluginFiles.size());
+    for (size_t i = 0; i < pluginFiles.size(); ++i) {
+        if (IsMasterPlugin(pluginFiles[i], metadata[i])) {
+            masterIndices.push_back(i);
+        } else {
+            nonMasterIndices.push_back(i);
+        }
+    }
+
+    for (size_t masterIdx : masterIndices) {
+        for (size_t pluginIdx : nonMasterIndices) {
+            addEdge(masterIdx, pluginIdx);
+        }
+    }
+
+    auto pluginKey = [&](size_t idx) {
+        const bool isOblivionMaster = _wcsicmp(pluginFiles[idx].c_str(), L"Oblivion.esm") == 0;
+        const bool isMaster = IsMasterPlugin(pluginFiles[idx], metadata[idx]);
+        return std::make_tuple(isOblivionMaster ? 0 : 1, isMaster ? 0 : 1, ToLowerCopy(pluginFiles[idx]));
+    };
+
+    using QItem = std::pair<std::tuple<int,int,std::wstring>, size_t>;
+    std::priority_queue<QItem, std::vector<QItem>, std::greater<QItem>> ready;
+    for (size_t i = 0; i < indegree.size(); ++i) {
+        if (indegree[i] == 0) ready.push({pluginKey(i), i});
+    }
+
+    std::vector<size_t> order;
+    order.reserve(pluginFiles.size());
+    while (!ready.empty()) {
+        const size_t node = ready.top().second;
+        ready.pop();
+        order.push_back(node);
+
+        for (size_t next : edges[node]) {
+            indegree[next] -= 1;
+            if (indegree[next] == 0) {
+                ready.push({pluginKey(next), next});
+            }
+        }
+    }
+
+    if (order.size() != pluginFiles.size()) {
+        AppendDataFilesSortLog(L"Sort failed: cyclic dependency graph detected.");
+        MessageBoxW(NULL,
+            L"Sorting failed: cyclic plugin dependencies detected.\n"
+            L"Please resolve conflicting master/dependency relationships and try again.",
+            L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    if (!unresolvedMasters.empty() || hadMetadataReadFailure) {
+        std::wstring warning = L"Sort completed with warnings:\n";
+
+        if (!unresolvedMasters.empty()) {
+            warning += L"\n- Missing masters in Data Files list: " + std::to_wstring(unresolvedMasters.size());
+            const size_t previewCount = std::min<size_t>(3, unresolvedMasters.size());
+            for (size_t i = 0; i < previewCount; ++i) {
+                warning += L"\n  * " + unresolvedMasters[i];
+            }
+            if (unresolvedMasters.size() > previewCount) {
+                warning += L"\n  * ...";
+            }
+        }
+
+        if (hadMetadataReadFailure) {
+            warning += L"\n- Some plugin headers could not be parsed; extension/fallback ordering was used.";
+        }
+
+        AppendDataFilesSortLog(warning);
+        MessageBoxW(NULL, warning.c_str(), L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
+    }
+
+    std::vector<std::wstring> reordered;
+    reordered.reserve(order.size());
+    for (size_t idx : order) {
+        reordered.push_back(pluginFiles[idx]);
+    }
+
+    const TimestampApplyResult timestampResult = SetPluginTimestampByOrder(reordered);
+    if (timestampResult == TimestampApplyResult::FailedRestored) {
+        AppendDataFilesSortLog(L"Timestamp apply failed. Original timestamps restored.");
+        MessageBoxW(NULL,
+            L"Load order was computed, but file timestamps could not be updated.\n"
+            L"Original timestamps were restored.",
+            L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
+    } else if (timestampResult == TimestampApplyResult::FailedRestoreError) {
+        AppendDataFilesSortLog(L"Timestamp apply failed and rollback incomplete.");
+        MessageBoxW(NULL,
+            L"Load order timestamp update failed and rollback was incomplete.\n"
+            L"Please verify plugin file timestamps before launching the game.",
+            L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
+    }
+
+    pluginFiles = std::move(reordered);
+    PopulatePluginList(hPluginList);
+
+    const int newCount = ListView_GetItemCount(hPluginList);
+    int selectedIndex = -1;
+    for (int i = 0; i < newCount; ++i) {
+        wchar_t buffer[MAX_PATH] = {};
+        ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
+        const std::wstring lowered = ToLowerCopy(buffer);
+
+        auto it = checkStateByPlugin.find(lowered);
+        if (it != checkStateByPlugin.end()) {
+            ListView_SetCheckState(hPluginList, i, it->second ? TRUE : FALSE);
+        }
+
+        if (!selectedPluginLower.empty() && lowered == selectedPluginLower) {
+            selectedIndex = i;
+        }
+    }
+
+    if (selectedIndex >= 0) {
+        ListView_SetItemState(hPluginList, selectedIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_EnsureVisible(hPluginList, selectedIndex, FALSE);
+        UpdatePluginDetails(selectedIndex);
+    } else {
+        SelectFirstPlugin();
+    }
+}
+
 
 } // namespace
 
@@ -406,7 +759,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         InitCommonControlsEx(&icex);
 
         g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        g_hTitleFont = CreateUiFont(13, FW_BOLD);
+        g_hTitleFont = CreateUiFont(13, FW_NORMAL);
         g_hMetaFont = CreateUiFont(10, FW_NORMAL);
 
         const int leftX = 18;
@@ -417,7 +770,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         const int rightX = 378;
         const int rightW = 288;
         const int pluginNameY = 22;
-        const int authorY = 54;
+        const int authorY = 72;
         const int descriptionY = 84;
         const int descriptionH = 330;
         const int createdOnY = 424;
@@ -449,8 +802,12 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             rightX, modifiedOnY, rightW, 22, hwnd, NULL, NULL, NULL);
 
         HWND hReset = CreateWindowW(L"BUTTON", L"Reset to Defaults", WS_VISIBLE | WS_CHILD,
-            18, 530, 288, 36,
+            18, 530, 178, 36,
             hwnd, (HMENU)IDC_RESET_BUTTON, NULL, NULL);
+
+        HWND hSort = CreateWindowW(L"BUTTON", L"Sort", WS_VISIBLE | WS_CHILD,
+            206, 530, 100, 36,
+            hwnd, (HMENU)IDC_SORT_BUTTON, NULL, NULL);
 
         HWND hCancel = CreateWindowW(L"BUTTON", L"Cancel", WS_VISIBLE | WS_CHILD,
             372, 530, 136, 36,
@@ -461,7 +818,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
 
         if (!hPluginList || !hPluginName || !hCreatedBy ||
-            !hDescription || !hCreatedOn || !hModifiedOn || !hReset || !hCancel || !hOk) {
+            !hDescription || !hCreatedOn || !hModifiedOn || !hReset || !hSort || !hCancel || !hOk) {
             MessageBoxW(hwnd, L"Failed to create Data Files controls.", L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
             DestroyWindow(hwnd);
             return -1;
@@ -480,6 +837,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             SetCommonFont(hModifiedOn);
         }
         SetCommonFont(hReset);
+        SetCommonFont(hSort);
         SetCommonFont(hCancel);
         SetCommonFont(hOk);
 
@@ -528,6 +886,9 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             return 0;
         case IDC_RESET_BUTTON:
             ResetToDefaults();
+            return 0;
+        case IDC_SORT_BUTTON:
+            SortPluginsSuggestedLoadOrder();
             return 0;
         }
         break;
