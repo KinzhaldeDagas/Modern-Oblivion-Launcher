@@ -718,11 +718,11 @@ static bool IsManagedKey(const std::wstring& fullKey)
         L"TerrainManager.uGridDistantCount",
         L"TerrainManager.uGridDistantTreeRange",
         L"Trees.uGridDistantTreeRange",
-        L"Advanced.TextureSize",
-        L"Advanced.TreeFade",
-        L"Advanced.ActorFade",
-        L"Advanced.ItemFade",
-        L"Advanced.ObjectFade",
+        L"Display.iTexMipMapSkip",
+        L"LOD.fLODMultTrees",
+        L"LOD.fLODMultActors",
+        L"LOD.fLODMultItems",
+        L"LOD.fLODMultObjects",
         L"Audio.MasterVolume",
         L"Audio.EffectsVolume",
         L"Audio.MusicVolume",
@@ -796,10 +796,12 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         return true;
     }
 
-    if (_wcsicmp(fullKey.c_str(), L"Advanced.TextureSize") == 0)
+    if (_wcsicmp(fullKey.c_str(), L"Display.iTexMipMapSkip") == 0)
     {
-        if (!ComboContainsText(gTexSizeCombo, v)) return false;
-        outValue = v;
+        int n = _wtoi(v.c_str());
+        if (n < 0) n = 0;
+        if (n > 2) n = 2;
+        outValue = std::to_wstring(n);
         return true;
     }
 
@@ -865,11 +867,7 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         return n;
         };
 
-    if (_wcsicmp(fullKey.c_str(), L"Advanced.TreeFade") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Advanced.ActorFade") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Advanced.ItemFade") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Advanced.ObjectFade") == 0 ||
-        _wcsicmp(fullKey.c_str(), L"Audio.MasterVolume") == 0 ||
+    if (_wcsicmp(fullKey.c_str(), L"Audio.MasterVolume") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Audio.EffectsVolume") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Audio.MusicVolume") == 0 ||
         _wcsicmp(fullKey.c_str(), L"Controls.MouseSensitivity") == 0)
@@ -894,6 +892,20 @@ static bool ValidateAndNormalizePresetValue(const std::wstring& fullKey, const s
         if (n < 0) n = 0;
         if (n > 5000) n = 5000;
         outValue = std::to_wstring(n);
+        return true;
+    }
+
+    if (_wcsicmp(fullKey.c_str(), L"LOD.fLODMultTrees") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"LOD.fLODMultActors") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"LOD.fLODMultItems") == 0 ||
+        _wcsicmp(fullKey.c_str(), L"LOD.fLODMultObjects") == 0)
+    {
+        wchar_t* end = nullptr;
+        double d = wcstod(v.c_str(), &end);
+        if (end == v.c_str()) return false;
+        if (d < 0.0) d = 0.0;
+        if (d > 15.0) d = 15.0;
+        outValue = FloatToWString(d, 4);
         return true;
     }
 
@@ -1096,7 +1108,12 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
     SendMessageW(gTreeCanopyShadowsCheck, BM_SETCHECK, (_wtoi(get(L"Display.bDoCanopyShadowPass", L"0").c_str()) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
     SetComboByData(gShadowFilterCombo, _wtoi(get(L"Display.iShadowFilter", L"2").c_str()));
 
-    int specPct = _wtoi(get(L"Display.fSpecualrStartMax", L"50").c_str());
+    double specValue = _wtof(get(L"Display.fSpecualrStartMax", L"50").c_str());
+    int specPct = 0;
+    if (specValue <= 100.0)
+        specPct = (int)(specValue + 0.5);
+    else
+        specPct = (int)((specValue / 1000.0) * 100.0 + 0.5);
     if (specPct < 0) specPct = 0;
     if (specPct > 100) specPct = 100;
     SetTrackPos(gSpecularTrack, specPct);
@@ -1116,7 +1133,15 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
     if (treeRange.empty()) treeRange = get(L"TerrainManager.uGridDistantTreeRange", L"30");
     SetEditInt(gGridDistantTreeRangeEdit, _wtoi(treeRange.c_str()));
 
-    std::wstring tex = get(L"Advanced.TextureSize", L"Large");
+    std::wstring tex = L"Large";
+    auto itTexSkip = kv.find(L"Display.iTexMipMapSkip");
+    if (itTexSkip != kv.end())
+    {
+        int texSkip = _wtoi(itTexSkip->second.c_str());
+        if (texSkip <= 0) tex = L"Large";
+        else if (texSkip == 1) tex = L"Medium";
+        else tex = L"Small";
+    }
     int tcount = (int)SendMessageW(gTexSizeCombo, CB_GETCOUNT, 0, 0);
     for (int i = 0; i < tcount; i++)
     {
@@ -1127,10 +1152,25 @@ static void ApplyStateToControls(const std::map<std::wstring, std::wstring>& kv,
 
     auto clamp01 = [](int v) { return (v < 0) ? 0 : (v > 100) ? 100 : v; };
 
-    int tree = clamp01(_wtoi(get(L"Advanced.TreeFade", L"50").c_str()));
-    int actor = clamp01(_wtoi(get(L"Advanced.ActorFade", L"50").c_str()));
-    int item = clamp01(_wtoi(get(L"Advanced.ItemFade", L"50").c_str()));
-    int obj = clamp01(_wtoi(get(L"Advanced.ObjectFade", L"50").c_str()));
+    int tree = 50;
+    auto itTree = kv.find(L"LOD.fLODMultTrees");
+    if (itTree != kv.end()) tree = (int)(_wtof(itTree->second.c_str()) * 150.0 + 0.5);
+    tree = clamp01(tree);
+
+    int actor = 50;
+    auto itActor = kv.find(L"LOD.fLODMultActors");
+    if (itActor != kv.end()) actor = (int)(_wtof(itActor->second.c_str()) * 15.0 + 0.5);
+    actor = clamp01(actor);
+
+    int item = 50;
+    auto itItem = kv.find(L"LOD.fLODMultItems");
+    if (itItem != kv.end()) item = (int)(_wtof(itItem->second.c_str()) * 15.0 + 0.5);
+    item = clamp01(item);
+
+    int obj = 50;
+    auto itObj = kv.find(L"LOD.fLODMultObjects");
+    if (itObj != kv.end()) obj = (int)(_wtof(itObj->second.c_str()) * 15.0 + 0.5);
+    obj = clamp01(obj);
 
     SetTrackPos(gTreeFadeTrack, tree);
     SetTrackPos(gActorFadeTrack, actor);
@@ -1276,11 +1316,22 @@ static void ApplyControlsToINI()
     WriteINIInt(L"TerrainManager", L"uGridDistantTreeRange", GetEditInt(gGridDistantTreeRangeEdit, 30));
     WriteINIInt(L"Trees", L"uGridDistantTreeRange", GetEditInt(gGridDistantTreeRangeEdit, 30));
 
-    WriteINIString(L"Advanced", L"TextureSize", GetComboText(gTexSizeCombo));
-    WriteINIInt(L"Advanced", L"TreeFade", GetTrackPos(gTreeFadeTrack, 50));
-    WriteINIInt(L"Advanced", L"ActorFade", GetTrackPos(gActorFadeTrack, 50));
-    WriteINIInt(L"Advanced", L"ItemFade", GetTrackPos(gItemFadeTrack, 50));
-    WriteINIInt(L"Advanced", L"ObjectFade", GetTrackPos(gObjectFadeTrack, 50));
+    const std::wstring textureSize = GetComboText(gTexSizeCombo);
+
+    int texMipMapSkip = 0;
+    if (_wcsicmp(textureSize.c_str(), L"Medium") == 0) texMipMapSkip = 1;
+    else if (_wcsicmp(textureSize.c_str(), L"Small") == 0) texMipMapSkip = 2;
+    WriteINIInt(L"Display", L"iTexMipMapSkip", texMipMapSkip);
+
+    const int treeFade = GetTrackPos(gTreeFadeTrack, 50);
+    const int actorFade = GetTrackPos(gActorFadeTrack, 50);
+    const int itemFade = GetTrackPos(gItemFadeTrack, 50);
+    const int objectFade = GetTrackPos(gObjectFadeTrack, 50);
+
+    WriteINIString(L"LOD", L"fLODMultTrees", FloatToWString(treeFade / 150.0, 4));
+    WriteINIString(L"LOD", L"fLODMultActors", FloatToWString(actorFade / 15.0, 4));
+    WriteINIString(L"LOD", L"fLODMultItems", FloatToWString(itemFade / 15.0, 4));
+    WriteINIString(L"LOD", L"fLODMultObjects", FloatToWString(objectFade / 15.0, 4));
 
     WriteINIInt(L"Audio", L"MasterVolume", GetTrackPos(gMasterVolTrack, 80));
     WriteINIInt(L"Audio", L"EffectsVolume", GetTrackPos(gEffectsVolTrack, 80));
@@ -1379,11 +1430,20 @@ static std::map<std::wstring, std::wstring> CaptureCurrentState()
     kv[L"TerrainManager.uGridDistantCount"] = std::to_wstring(GetEditInt(gGridDistantCountEdit, 30));
     kv[L"Trees.uGridDistantTreeRange"] = std::to_wstring(GetEditInt(gGridDistantTreeRangeEdit, 30));
 
-    kv[L"Advanced.TextureSize"] = GetComboText(gTexSizeCombo);
-    kv[L"Advanced.TreeFade"] = std::to_wstring(GetTrackPos(gTreeFadeTrack, 50));
-    kv[L"Advanced.ActorFade"] = std::to_wstring(GetTrackPos(gActorFadeTrack, 50));
-    kv[L"Advanced.ItemFade"] = std::to_wstring(GetTrackPos(gItemFadeTrack, 50));
-    kv[L"Advanced.ObjectFade"] = std::to_wstring(GetTrackPos(gObjectFadeTrack, 50));
+    int texMipMapSkip = 0;
+    std::wstring textureSize = GetComboText(gTexSizeCombo);
+    if (_wcsicmp(textureSize.c_str(), L"Medium") == 0) texMipMapSkip = 1;
+    else if (_wcsicmp(textureSize.c_str(), L"Small") == 0) texMipMapSkip = 2;
+    kv[L"Display.iTexMipMapSkip"] = std::to_wstring(texMipMapSkip);
+
+    const int treeFade = GetTrackPos(gTreeFadeTrack, 50);
+    const int actorFade = GetTrackPos(gActorFadeTrack, 50);
+    const int itemFade = GetTrackPos(gItemFadeTrack, 50);
+    const int objectFade = GetTrackPos(gObjectFadeTrack, 50);
+    kv[L"LOD.fLODMultTrees"] = FloatToWString(treeFade / 150.0, 4);
+    kv[L"LOD.fLODMultActors"] = FloatToWString(actorFade / 15.0, 4);
+    kv[L"LOD.fLODMultItems"] = FloatToWString(itemFade / 15.0, 4);
+    kv[L"LOD.fLODMultObjects"] = FloatToWString(objectFade / 15.0, 4);
 
     kv[L"Audio.MasterVolume"] = std::to_wstring(GetTrackPos(gMasterVolTrack, 80));
     kv[L"Audio.EffectsVolume"] = std::to_wstring(GetTrackPos(gEffectsVolTrack, 80));
@@ -1618,7 +1678,11 @@ static void LoadFromINI()
     if (treeRangeIni == INT_MIN) treeRangeIni = GetINIInt(L"TerrainManager", L"uGridDistantTreeRange", 30);
     SetEditInt(gGridDistantTreeRangeEdit, treeRangeIni);
 
-    std::wstring tex = GetINIString(L"Advanced", L"TextureSize", L"Large");
+    int texSkip = GetINIInt(L"Display", L"iTexMipMapSkip", 0);
+    std::wstring tex;
+    if (texSkip <= 0) tex = L"Large";
+    else if (texSkip == 1) tex = L"Medium";
+    else tex = L"Small";
     int tcount = (int)SendMessageW(gTexSizeCombo, CB_GETCOUNT, 0, 0);
     for (int i = 0; i < tcount; i++)
     {
@@ -1629,10 +1693,17 @@ static void LoadFromINI()
 
     auto clamp01 = [](int v) { return (v < 0) ? 0 : (v > 100) ? 100 : v; };
 
-    int tree = clamp01(GetINIInt(L"Advanced", L"TreeFade", 50));
-    int actor = clamp01(GetINIInt(L"Advanced", L"ActorFade", 50));
-    int item = clamp01(GetINIInt(L"Advanced", L"ItemFade", 50));
-    int obj = clamp01(GetINIInt(L"Advanced", L"ObjectFade", 50));
+    int tree = (int)(_wtof(GetINIString(L"LOD", L"fLODMultTrees", L"0.3333").c_str()) * 150.0 + 0.5);
+    tree = clamp01(tree);
+
+    int actor = (int)(_wtof(GetINIString(L"LOD", L"fLODMultActors", L"3.3333").c_str()) * 15.0 + 0.5);
+    actor = clamp01(actor);
+
+    int item = (int)(_wtof(GetINIString(L"LOD", L"fLODMultItems", L"3.3333").c_str()) * 15.0 + 0.5);
+    item = clamp01(item);
+
+    int obj = (int)(_wtof(GetINIString(L"LOD", L"fLODMultObjects", L"3.3333").c_str()) * 15.0 + 0.5);
+    obj = clamp01(obj);
 
     SetTrackPos(gTreeFadeTrack, tree);
     SetTrackPos(gActorFadeTrack, actor);
@@ -1752,11 +1823,11 @@ static std::map<std::wstring, std::wstring> BuildVideoPresetState(const std::wst
     kv[L"TerrainManager.uGridDistantCount"] = L"30";
     kv[L"TerrainManager.uGridDistantTreeRange"] = L"30";
     kv[L"Trees.uGridDistantTreeRange"] = L"30";
-    kv[L"Advanced.TextureSize"] = L"Large";
-    kv[L"Advanced.TreeFade"] = L"100";
-    kv[L"Advanced.ActorFade"] = L"100";
-    kv[L"Advanced.ItemFade"] = L"100";
-    kv[L"Advanced.ObjectFade"] = L"100";
+    kv[L"Display.iTexMipMapSkip"] = L"0";
+    kv[L"LOD.fLODMultTrees"] = L"0.6667";
+    kv[L"LOD.fLODMultActors"] = L"6.6667";
+    kv[L"LOD.fLODMultItems"] = L"6.6667";
+    kv[L"LOD.fLODMultObjects"] = L"6.6667";
     kv[L"Controls.fJumpAnimDelay"] = L"0.2500";
     kv[L"SpeedTree.fLODTreeMipMapLODBias"] = L"-0.5000";
     kv[L"SpeedTree.fLocalTreeMipMapLODBias"] = L"0.0000";
@@ -1775,11 +1846,11 @@ static std::map<std::wstring, std::wstring> BuildVideoPresetState(const std::wst
         kv[L"Water.bUseWaterDisplacements"] = L"0";
         kv[L"Display.bDynamicWindowReflections"] = L"0";
         kv[L"Decals.iMaxDecalsPerFrame"] = L"2";
-        kv[L"Advanced.TextureSize"] = L"Small";
-        kv[L"Advanced.TreeFade"] = L"35";
-        kv[L"Advanced.ActorFade"] = L"35";
-        kv[L"Advanced.ItemFade"] = L"35";
-        kv[L"Advanced.ObjectFade"] = L"35";
+        kv[L"Display.iTexMipMapSkip"] = L"2";
+        kv[L"LOD.fLODMultTrees"] = L"0.2333";
+        kv[L"LOD.fLODMultActors"] = L"2.3333";
+        kv[L"LOD.fLODMultItems"] = L"2.3333";
+        kv[L"LOD.fLODMultObjects"] = L"2.3333";
     }
     else if (_wcsicmp(n.c_str(), L"Low") == 0)
     {
@@ -1793,16 +1864,16 @@ static std::map<std::wstring, std::wstring> BuildVideoPresetState(const std::wst
         kv[L"Water.bUseWaterDisplacements"] = L"0";
         kv[L"Display.bDynamicWindowReflections"] = L"0";
         kv[L"Decals.iMaxDecalsPerFrame"] = L"2";
-        kv[L"Advanced.TextureSize"] = L"Small";
+        kv[L"Display.iTexMipMapSkip"] = L"2";
         kv[L"Water.bUseWaterDepth"] = L"0";
         kv[L"Water.bUseWaterHiRes"] = L"0";
         kv[L"TerrainManager.uGridDistantCount"] = L"14";
         kv[L"TerrainManager.uGridDistantTreeRange"] = L"14";
         kv[L"Trees.uGridDistantTreeRange"] = L"14";
-        kv[L"Advanced.TreeFade"] = L"50";
-        kv[L"Advanced.ActorFade"] = L"50";
-        kv[L"Advanced.ItemFade"] = L"50";
-        kv[L"Advanced.ObjectFade"] = L"50";
+        kv[L"LOD.fLODMultTrees"] = L"0.3333";
+        kv[L"LOD.fLODMultActors"] = L"3.3333";
+        kv[L"LOD.fLODMultItems"] = L"3.3333";
+        kv[L"LOD.fLODMultObjects"] = L"3.3333";
     }
     else if (_wcsicmp(n.c_str(), L"Medium") == 0)
     {
@@ -1813,11 +1884,11 @@ static std::map<std::wstring, std::wstring> BuildVideoPresetState(const std::wst
         kv[L"Water.iWaterMult"] = L"2";
         kv[L"Display.bDynamicWindowReflections"] = L"0";
         kv[L"Decals.iMaxDecalsPerFrame"] = L"5";
-        kv[L"Advanced.TextureSize"] = L"Medium";
-        kv[L"Advanced.TreeFade"] = L"70";
-        kv[L"Advanced.ActorFade"] = L"70";
-        kv[L"Advanced.ItemFade"] = L"70";
-        kv[L"Advanced.ObjectFade"] = L"70";
+        kv[L"Display.iTexMipMapSkip"] = L"1";
+        kv[L"LOD.fLODMultTrees"] = L"0.4667";
+        kv[L"LOD.fLODMultActors"] = L"4.6667";
+        kv[L"LOD.fLODMultItems"] = L"4.6667";
+        kv[L"LOD.fLODMultObjects"] = L"4.6667";
     }
     else if (_wcsicmp(n.c_str(), L"High") == 0)
     {
@@ -1831,11 +1902,11 @@ static std::map<std::wstring, std::wstring> BuildVideoPresetState(const std::wst
         kv[L"TerrainManager.uGridDistantTreeRange"] = L"34";
         kv[L"Trees.uGridDistantTreeRange"] = L"34";
         kv[L"Decals.iMaxDecalsPerFrame"] = L"10";
-        kv[L"Advanced.TextureSize"] = L"Large";
-        kv[L"Advanced.TreeFade"] = L"85";
-        kv[L"Advanced.ActorFade"] = L"85";
-        kv[L"Advanced.ItemFade"] = L"85";
-        kv[L"Advanced.ObjectFade"] = L"85";
+        kv[L"Display.iTexMipMapSkip"] = L"0";
+        kv[L"LOD.fLODMultTrees"] = L"0.5667";
+        kv[L"LOD.fLODMultActors"] = L"5.6667";
+        kv[L"LOD.fLODMultItems"] = L"5.6667";
+        kv[L"LOD.fLODMultObjects"] = L"5.6667";
     }
     else // Ultra High
     {
@@ -1853,11 +1924,11 @@ static std::map<std::wstring, std::wstring> BuildVideoPresetState(const std::wst
         kv[L"Trees.uGridDistantTreeRange"] = L"44";
         kv[L"Display.bDynamicWindowReflections"] = L"1";
         kv[L"Decals.iMaxDecalsPerFrame"] = L"10";
-        kv[L"Advanced.TextureSize"] = L"Large";
-        kv[L"Advanced.TreeFade"] = L"100";
-        kv[L"Advanced.ActorFade"] = L"100";
-        kv[L"Advanced.ItemFade"] = L"100";
-        kv[L"Advanced.ObjectFade"] = L"100";
+        kv[L"Display.iTexMipMapSkip"] = L"0";
+        kv[L"LOD.fLODMultTrees"] = L"0.6667";
+        kv[L"LOD.fLODMultActors"] = L"6.6667";
+        kv[L"LOD.fLODMultItems"] = L"6.6667";
+        kv[L"LOD.fLODMultObjects"] = L"6.6667";
     }
 
     return kv;
