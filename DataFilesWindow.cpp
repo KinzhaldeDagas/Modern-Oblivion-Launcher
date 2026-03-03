@@ -5,7 +5,10 @@
 #include "DataFilesWindow.h"
 
 #include <algorithm>
+#include <functional>
+#include <unordered_map>
 #include <cstdint>
+#include <cwctype>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -18,8 +21,11 @@
 #define IDC_OK_BUTTON        1002
 #define IDC_CANCEL_BUTTON    1003
 #define IDC_RESET_BUTTON     1004
-#define IDC_DESCRIPTION_EDIT 1005
+#define IDC_SORT_BUTTON      1005
+#define IDC_DESCRIPTION_EDIT 1006
 #define IDT_HALL_OF_FAME   2001
+
+void PopulatePluginList(HWND hwndList);
 
 namespace {
 
@@ -87,6 +93,14 @@ static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
 
 static bool EqualsNoCase(const std::wstring& a, const std::wstring& b) {
     return _wcsicmp(a.c_str(), b.c_str()) == 0;
+}
+
+static std::wstring ToLowerCopy(const std::wstring& value) {
+    std::wstring lowered = value;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](wchar_t c) {
+        return (wchar_t)towlower(c);
+    });
+    return lowered;
 }
 
 static bool IsPluginFile(const std::wstring& fileName) {
@@ -307,6 +321,71 @@ static void ResetToDefaults() {
     }
 }
 
+static void SortPluginsSuggestedLoadOrder() {
+    if (!hPluginList || pluginFiles.empty()) return;
+
+    std::unordered_map<std::wstring, size_t> indexByName;
+    indexByName.reserve(pluginFiles.size());
+    for (size_t i = 0; i < pluginFiles.size(); ++i) {
+        indexByName[ToLowerCopy(pluginFiles[i])] = i;
+    }
+
+    std::vector<PluginHeaderMetadata> metadata(pluginFiles.size());
+    for (size_t i = 0; i < pluginFiles.size(); ++i) {
+        ReadPluginHeaderMetadata(pluginFiles[i], &metadata[i]);
+    }
+
+    std::vector<int> order;
+    order.reserve(pluginFiles.size());
+    std::vector<unsigned char> state(pluginFiles.size(), 0);
+
+    std::function<void(size_t)> visit = [&](size_t i) {
+        if (state[i] == 2) return;
+        if (state[i] == 1) return;
+        state[i] = 1;
+
+        for (const std::wstring& master : metadata[i].masters) {
+            auto it = indexByName.find(ToLowerCopy(master));
+            if (it != indexByName.end()) {
+                visit(it->second);
+            }
+        }
+
+        state[i] = 2;
+        order.push_back((int)i);
+    };
+
+    std::vector<size_t> indices(pluginFiles.size());
+    for (size_t i = 0; i < pluginFiles.size(); ++i) indices[i] = i;
+    std::sort(indices.begin(), indices.end(), [](size_t a, size_t b) {
+        const bool aIsOblivion = _wcsicmp(pluginFiles[a].c_str(), L"Oblivion.esm") == 0;
+        const bool bIsOblivion = _wcsicmp(pluginFiles[b].c_str(), L"Oblivion.esm") == 0;
+        if (aIsOblivion != bIsOblivion) return aIsOblivion;
+
+        const std::wstring aExt = PathFindExtensionW(pluginFiles[a].c_str());
+        const std::wstring bExt = PathFindExtensionW(pluginFiles[b].c_str());
+        const bool aIsMaster = _wcsicmp(aExt.c_str(), L".esm") == 0;
+        const bool bIsMaster = _wcsicmp(bExt.c_str(), L".esm") == 0;
+        if (aIsMaster != bIsMaster) return aIsMaster;
+
+        return _wcsicmp(pluginFiles[a].c_str(), pluginFiles[b].c_str()) < 0;
+    });
+
+    for (size_t i : indices) {
+        visit(i);
+    }
+
+    std::vector<std::wstring> reordered;
+    reordered.reserve(order.size());
+    for (int idx : order) {
+        reordered.push_back(pluginFiles[(size_t)idx]);
+    }
+
+    pluginFiles = std::move(reordered);
+    PopulatePluginList(hPluginList);
+    SelectFirstPlugin();
+}
+
 } // namespace
 
 std::wstring GetOblivionDataPath() {
@@ -457,8 +536,12 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             rightX, modifiedOnY, rightW, 22, hwnd, NULL, NULL, NULL);
 
         HWND hReset = CreateWindowW(L"BUTTON", L"Reset to Defaults", WS_VISIBLE | WS_CHILD,
-            18, 530, 288, 36,
+            18, 530, 178, 36,
             hwnd, (HMENU)IDC_RESET_BUTTON, NULL, NULL);
+
+        HWND hSort = CreateWindowW(L"BUTTON", L"Sort", WS_VISIBLE | WS_CHILD,
+            206, 530, 100, 36,
+            hwnd, (HMENU)IDC_SORT_BUTTON, NULL, NULL);
 
         HWND hCancel = CreateWindowW(L"BUTTON", L"Cancel", WS_VISIBLE | WS_CHILD,
             372, 530, 136, 36,
@@ -469,7 +552,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
 
         if (!hPluginList || !hPluginName || !hCreatedBy ||
-            !hDescription || !hCreatedOn || !hModifiedOn || !hReset || !hCancel || !hOk) {
+            !hDescription || !hCreatedOn || !hModifiedOn || !hReset || !hSort || !hCancel || !hOk) {
             MessageBoxW(hwnd, L"Failed to create Data Files controls.", L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
             DestroyWindow(hwnd);
             return -1;
@@ -488,6 +571,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             SetCommonFont(hModifiedOn);
         }
         SetCommonFont(hReset);
+        SetCommonFont(hSort);
         SetCommonFont(hCancel);
         SetCommonFont(hOk);
 
@@ -536,6 +620,9 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             return 0;
         case IDC_RESET_BUTTON:
             ResetToDefaults();
+            return 0;
+        case IDC_SORT_BUTTON:
+            SortPluginsSuggestedLoadOrder();
             return 0;
         }
         break;
