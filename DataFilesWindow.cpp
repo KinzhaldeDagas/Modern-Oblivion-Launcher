@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <functional>
+#include <queue>
 #include <unordered_map>
 #include <cstdint>
 #include <cwctype>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -161,6 +163,7 @@ struct PluginHeaderMetadata {
     std::wstring author;
     std::wstring description;
     std::vector<std::wstring> masters;
+    bool isMasterFlagged = false;
 };
 
 static uint16_t ReadU16LE(const unsigned char* p) {
@@ -199,6 +202,9 @@ static bool ReadPluginHeaderMetadata(const std::wstring& pluginName, PluginHeade
     if (dataSize == 0 || dataSize > (16u * 1024u * 1024u)) {
         return false;
     }
+
+    const uint32_t recordFlags = ReadU32LE(&recordHeader[8]);
+    outMeta->isMasterFlagged = (recordFlags & 0x00000001u) != 0;
 
     std::vector<unsigned char> data(dataSize);
     f.read(reinterpret_cast<char*>(data.data()), (std::streamsize)data.size());
@@ -321,8 +327,69 @@ static void ResetToDefaults() {
     }
 }
 
+static bool IsMasterPlugin(const std::wstring& pluginName, const PluginHeaderMetadata& meta) {
+    if (meta.isMasterFlagged) return true;
+    const wchar_t* ext = PathFindExtensionW(pluginName.c_str());
+    return ext && _wcsicmp(ext, L".esm") == 0;
+}
+
+static bool SetPluginTimestampByOrder(const std::vector<std::wstring>& orderedPlugins) {
+    if (orderedPlugins.empty()) return true;
+
+    SYSTEMTIME st = {};
+    st.wYear = 2006;
+    st.wMonth = 1;
+    st.wDay = 1;
+    st.wHour = 0;
+    st.wMinute = 0;
+    st.wSecond = 0;
+    st.wMilliseconds = 0;
+
+    FILETIME baseUtc = {};
+    if (!SystemTimeToFileTime(&st, &baseUtc)) {
+        return false;
+    }
+
+    ULARGE_INTEGER tick = {};
+    tick.LowPart = baseUtc.dwLowDateTime;
+    tick.HighPart = baseUtc.dwHighDateTime;
+
+    const ULONGLONG oneSecond = 10ULL * 1000ULL * 1000ULL;
+
+    for (size_t i = 0; i < orderedPlugins.size(); ++i) {
+        const std::wstring path = JoinPath(dataPath, orderedPlugins[i]);
+        HANDLE file = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (file == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+
+        ULARGE_INTEGER ts = {};
+        ts.QuadPart = tick.QuadPart + (ULONGLONG)i * oneSecond;
+        FILETIME ft = {};
+        ft.dwLowDateTime = ts.LowPart;
+        ft.dwHighDateTime = ts.HighPart;
+
+        const BOOL ok = SetFileTime(file, NULL, NULL, &ft);
+        CloseHandle(file);
+        if (!ok) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void SortPluginsSuggestedLoadOrder() {
     if (!hPluginList || pluginFiles.empty()) return;
+
+    std::map<std::wstring, bool> checkStateByPlugin;
+    const int itemCount = ListView_GetItemCount(hPluginList);
+    for (int i = 0; i < itemCount; ++i) {
+        wchar_t buffer[MAX_PATH] = {};
+        ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
+        checkStateByPlugin[ToLowerCopy(buffer)] = ListView_GetCheckState(hPluginList, i) != FALSE;
+    }
 
     std::unordered_map<std::wstring, size_t> indexByName;
     indexByName.reserve(pluginFiles.size());
@@ -335,56 +402,101 @@ static void SortPluginsSuggestedLoadOrder() {
         ReadPluginHeaderMetadata(pluginFiles[i], &metadata[i]);
     }
 
-    std::vector<int> order;
-    order.reserve(pluginFiles.size());
-    std::vector<unsigned char> state(pluginFiles.size(), 0);
+    std::vector<std::vector<size_t>> edges(pluginFiles.size());
+    std::vector<int> indegree(pluginFiles.size(), 0);
 
-    std::function<void(size_t)> visit = [&](size_t i) {
-        if (state[i] == 2) return;
-        if (state[i] == 1) return;
-        state[i] = 1;
+    auto addEdge = [&](size_t from, size_t to) {
+        if (from == to) return;
+        auto& row = edges[from];
+        if (std::find(row.begin(), row.end(), to) != row.end()) return;
+        row.push_back(to);
+        indegree[to] += 1;
+    };
 
+    for (size_t i = 0; i < pluginFiles.size(); ++i) {
         for (const std::wstring& master : metadata[i].masters) {
             auto it = indexByName.find(ToLowerCopy(master));
             if (it != indexByName.end()) {
-                visit(it->second);
+                addEdge(it->second, i);
             }
         }
+    }
 
-        state[i] = 2;
-        order.push_back((int)i);
+    for (size_t i = 0; i < pluginFiles.size(); ++i) {
+        const bool iMaster = IsMasterPlugin(pluginFiles[i], metadata[i]);
+        for (size_t j = 0; j < pluginFiles.size(); ++j) {
+            if (i == j) continue;
+            const bool jMaster = IsMasterPlugin(pluginFiles[j], metadata[j]);
+            if (iMaster && !jMaster) {
+                addEdge(i, j);
+            }
+        }
+    }
+
+    auto pluginKey = [&](size_t idx) {
+        const bool isOblivionMaster = _wcsicmp(pluginFiles[idx].c_str(), L"Oblivion.esm") == 0;
+        const bool isMaster = IsMasterPlugin(pluginFiles[idx], metadata[idx]);
+        return std::make_tuple(isOblivionMaster ? 0 : 1, isMaster ? 0 : 1, ToLowerCopy(pluginFiles[idx]));
     };
 
-    std::vector<size_t> indices(pluginFiles.size());
-    for (size_t i = 0; i < pluginFiles.size(); ++i) indices[i] = i;
-    std::sort(indices.begin(), indices.end(), [](size_t a, size_t b) {
-        const bool aIsOblivion = _wcsicmp(pluginFiles[a].c_str(), L"Oblivion.esm") == 0;
-        const bool bIsOblivion = _wcsicmp(pluginFiles[b].c_str(), L"Oblivion.esm") == 0;
-        if (aIsOblivion != bIsOblivion) return aIsOblivion;
+    using QItem = std::pair<std::tuple<int,int,std::wstring>, size_t>;
+    std::priority_queue<QItem, std::vector<QItem>, std::greater<QItem>> ready;
+    for (size_t i = 0; i < indegree.size(); ++i) {
+        if (indegree[i] == 0) ready.push({pluginKey(i), i});
+    }
 
-        const std::wstring aExt = PathFindExtensionW(pluginFiles[a].c_str());
-        const std::wstring bExt = PathFindExtensionW(pluginFiles[b].c_str());
-        const bool aIsMaster = _wcsicmp(aExt.c_str(), L".esm") == 0;
-        const bool bIsMaster = _wcsicmp(bExt.c_str(), L".esm") == 0;
-        if (aIsMaster != bIsMaster) return aIsMaster;
+    std::vector<size_t> order;
+    order.reserve(pluginFiles.size());
+    while (!ready.empty()) {
+        const size_t node = ready.top().second;
+        ready.pop();
+        order.push_back(node);
 
-        return _wcsicmp(pluginFiles[a].c_str(), pluginFiles[b].c_str()) < 0;
-    });
+        for (size_t next : edges[node]) {
+            indegree[next] -= 1;
+            if (indegree[next] == 0) {
+                ready.push({pluginKey(next), next});
+            }
+        }
+    }
 
-    for (size_t i : indices) {
-        visit(i);
+    if (order.size() != pluginFiles.size()) {
+        MessageBoxW(NULL,
+            L"Sorting failed: cyclic plugin dependencies detected.\n"
+            L"Please resolve conflicting master/dependency relationships and try again.",
+            L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
+        return;
     }
 
     std::vector<std::wstring> reordered;
     reordered.reserve(order.size());
-    for (int idx : order) {
-        reordered.push_back(pluginFiles[(size_t)idx]);
+    for (size_t idx : order) {
+        reordered.push_back(pluginFiles[idx]);
+    }
+
+    if (!SetPluginTimestampByOrder(reordered)) {
+        MessageBoxW(NULL,
+            L"Load order was computed, but file timestamps could not be updated.\n"
+            L"Oblivion uses timestamps for effective load order.",
+            L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
     }
 
     pluginFiles = std::move(reordered);
     PopulatePluginList(hPluginList);
+
+    const int newCount = ListView_GetItemCount(hPluginList);
+    for (int i = 0; i < newCount; ++i) {
+        wchar_t buffer[MAX_PATH] = {};
+        ListView_GetItemText(hPluginList, i, 0, buffer, MAX_PATH);
+        auto it = checkStateByPlugin.find(ToLowerCopy(buffer));
+        if (it != checkStateByPlugin.end()) {
+            ListView_SetCheckState(hPluginList, i, it->second ? TRUE : FALSE);
+        }
+    }
+
     SelectFirstPlugin();
 }
+
 
 } // namespace
 
