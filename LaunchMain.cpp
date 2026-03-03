@@ -17,6 +17,7 @@
 #include "resource.h"
 #include "OptionsWindow.h"
 #include "DataFilesWindow.h"
+#include "iniOblivion.h"
 
 using namespace Gdiplus;
 
@@ -51,6 +52,7 @@ static std::wstring g_fontFaceName;
 static std::wstring g_fontFilePath;
 static HINSTANCE g_hInstance = nullptr;
 static HWND g_hLaunchCseButton = nullptr;
+static bool g_enableConstructionSetButton = true;
 static ConstructionSetLaunchMode g_csLaunchMode = ConstructionSetLaunchMode::None;
 static std::wstring g_csLaunchPath;
 static std::wstring g_csLaunchWorkingDir;
@@ -118,12 +120,6 @@ Image* LoadPNGFromResource(WORD r) {
     return img;
 }
 
-HFONT LoadCustomFontAndCreateHFONT(WORD r, float fontSize) {
-    (void)r;
-    (void)fontSize;
-    return nullptr;
-}
-
 static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     if (a.empty()) return b;
     if (b.empty()) return a;
@@ -166,10 +162,7 @@ static std::wstring FindFontFileNearSolutionRoot() {
             if (PathFileExistsW(fontPath.c_str())) return fontPath;
 
             const std::wstring slnPath = JoinPath(dir, slnName);
-            if (PathFileExistsW(slnPath.c_str())) {
-                const std::wstring slnFont = JoinPath(dir, fontName);
-                if (PathFileExistsW(slnFont.c_str())) return slnFont;
-            }
+            if (PathFileExistsW(slnPath.c_str())) return fontPath;
             dir = ParentDir(dir);
         }
     }
@@ -334,6 +327,11 @@ static std::wstring ResolveOblivionRootPath() {
     return basePath;
 }
 
+static bool IsConstructionSetButtonEnabled() {
+    InitializeINI();
+    return GetINIInt(L"Launcher", L"bEnableConstructionSetButton", 1) != 0;
+}
+
 static void DetectConstructionSetLaunchTarget() {
     g_csLaunchMode = ConstructionSetLaunchMode::None;
     g_csLaunchPath.clear();
@@ -475,11 +473,14 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_CREATE: {
         g_hCustomFont = LoadOblivionFontFromFile(18.0f, false);
         DetectConstructionSetLaunchTarget();
+        g_enableConstructionSetButton = IsConstructionSetButtonEnabled();
 
         int xPos = WINDOW_WIDTH - BUTTON_WIDTH - 128 - EXTRA_LEFT_SHIFT;
-        int totalBtns = 6;
-        int totalHeight = totalBtns * BUTTON_HEIGHT + (totalBtns - 1) * BUTTON_SPACING;
-        int startY = (WINDOW_HEIGHT - totalHeight) / 2;
+        const bool showLaunchCs = g_enableConstructionSetButton;
+        const int totalBtns = showLaunchCs ? 6 : 5;
+        const int totalHeight = totalBtns * BUTTON_HEIGHT + (totalBtns - 1) * BUTTON_SPACING;
+        const int startY = (WINDOW_HEIGHT - totalHeight) / 2;
+
         auto makeBtn = [&](const wchar_t* text, int id, int idx) {
             HWND hBtn = CreateWindowW(
                 L"BUTTON",
@@ -499,35 +500,42 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             SetWindowTheme(hBtn, L"", L"");
             SetWindowSubclass(hBtn, HoverBtnSubProc, 1, 0);
-            };
-        makeBtn(L"Play", ID_BUTTON_PLAY, 0);
-        const wchar_t* cseText = (g_csLaunchMode == ConstructionSetLaunchMode::Batch) ? L"Launch CSE" : L"Launch CS";
-        g_hLaunchCseButton = CreateWindowW(
-            L"BUTTON",
-            cseText,
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-            xPos - (CSE_BUTTON_EXTRA_WIDTH / 2),
-            startY + 1 * (BUTTON_HEIGHT + BUTTON_SPACING),
-            BUTTON_WIDTH + CSE_BUTTON_EXTRA_WIDTH,
-            BUTTON_HEIGHT,
-            hWnd,
-            (HMENU)(INT_PTR)ID_BUTTON_LAUNCH_CSE,
-            g_hInstance,
-            nullptr
-        );
-        if (g_hCustomFont && g_hLaunchCseButton) {
-            SendMessage(g_hLaunchCseButton, WM_SETFONT, (WPARAM)g_hCustomFont, TRUE);
-        }
-        SetWindowTheme(g_hLaunchCseButton, L"", L"");
-        SetWindowSubclass(g_hLaunchCseButton, HoverBtnSubProc, 1, 0);
-        if (g_csLaunchMode == ConstructionSetLaunchMode::None && g_hLaunchCseButton) {
-            EnableWindow(g_hLaunchCseButton, FALSE);
+        };
+
+        int idx = 0;
+        makeBtn(L"Play", ID_BUTTON_PLAY, idx++);
+
+        g_hLaunchCseButton = nullptr;
+        if (showLaunchCs) {
+            const wchar_t* cseText = (g_csLaunchMode == ConstructionSetLaunchMode::Batch) ? L"Launch CSE" : L"Launch CS";
+            g_hLaunchCseButton = CreateWindowW(
+                L"BUTTON",
+                cseText,
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                xPos - (CSE_BUTTON_EXTRA_WIDTH / 2),
+                startY + idx * (BUTTON_HEIGHT + BUTTON_SPACING),
+                BUTTON_WIDTH + CSE_BUTTON_EXTRA_WIDTH,
+                BUTTON_HEIGHT,
+                hWnd,
+                (HMENU)(INT_PTR)ID_BUTTON_LAUNCH_CSE,
+                g_hInstance,
+                nullptr
+            );
+            if (g_hCustomFont && g_hLaunchCseButton) {
+                SendMessage(g_hLaunchCseButton, WM_SETFONT, (WPARAM)g_hCustomFont, TRUE);
+            }
+            SetWindowTheme(g_hLaunchCseButton, L"", L"");
+            SetWindowSubclass(g_hLaunchCseButton, HoverBtnSubProc, 1, 0);
+            if (g_csLaunchMode == ConstructionSetLaunchMode::None && g_hLaunchCseButton) {
+                EnableWindow(g_hLaunchCseButton, FALSE);
+            }
+            idx++;
         }
 
-        makeBtn(L"Options", ID_BUTTON_OPTIONS, 2);
-        makeBtn(L"Data Files", ID_BUTTON_DATAFILES, 3);
-        makeBtn(L"Support", ID_BUTTON_TECHSUPPORT, 4);
-        makeBtn(L"Exit", ID_BUTTON_EXIT, 5);
+        makeBtn(L"Options", ID_BUTTON_OPTIONS, idx++);
+        makeBtn(L"Data Files", ID_BUTTON_DATAFILES, idx++);
+        makeBtn(L"Support", ID_BUTTON_TECHSUPPORT, idx++);
+        makeBtn(L"Exit", ID_BUTTON_EXIT, idx++);
         return 0;
     }
     case WM_COMMAND: {

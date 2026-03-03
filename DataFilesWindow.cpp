@@ -9,6 +9,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <cstdlib>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
@@ -27,6 +28,7 @@ static std::vector<std::wstring> activePlugins;
 
 static HWND hPluginList = NULL;
 static HWND hPluginName = NULL;
+static HWND hHallOfFame = NULL;
 static HWND hCreatedBy = NULL;
 static HWND hDescription = NULL;
 static HWND hCreatedOn = NULL;
@@ -34,6 +36,26 @@ static HWND hModifiedOn = NULL;
 
 static std::wstring dataPath;
 static HFONT g_hCommonFont = NULL;
+
+static const std::vector<std::wstring> kHallOfFame = {
+    L"Daggers", L"Alenet", L"llde", L"ponyrider0", L"gbr", L"shademe"
+};
+static int gHallOfFameIndex = -1;
+
+static void UpdateHallOfFameLabel() {
+    if (!hHallOfFame || kHallOfFame.empty()) return;
+
+    int nextIndex = 0;
+    if (kHallOfFame.size() > 1) {
+        do {
+            nextIndex = rand() % (int)kHallOfFame.size();
+        } while (nextIndex == gHallOfFameIndex);
+    }
+
+    gHallOfFameIndex = nextIndex;
+    const std::wstring text = L"Hall of Fame: " + kHallOfFame[(size_t)gHallOfFameIndex];
+    SetWindowTextW(hHallOfFame, text.c_str());
+}
 
 static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     if (a.empty()) return b;
@@ -370,6 +392,9 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             28, 56, 338, 434,
             hwnd, (HMENU)IDC_PLUGIN_LIST, NULL, NULL);
 
+        hHallOfFame = CreateWindowW(L"STATIC", L"Hall of Fame:", WS_VISIBLE | WS_CHILD,
+            378, 18, 288, 24, hwnd, NULL, NULL, NULL);
+
         hPluginName = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD,
             378, 44, 288, 24, hwnd, NULL, NULL, NULL);
 
@@ -399,7 +424,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             524, 530, 136, 36,
             hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
 
-        if (!hDataFilesLabel || !hLeftFrame || !hPluginList || !hPluginName || !hCreatedBy ||
+        if (!hDataFilesLabel || !hLeftFrame || !hPluginList || !hHallOfFame || !hPluginName || !hCreatedBy ||
             !hDescription || !hCreatedOn || !hModifiedOn || !hReset || !hCancel || !hOk) {
             MessageBoxW(hwnd, L"Failed to create Data Files controls.", L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
             DestroyWindow(hwnd);
@@ -409,6 +434,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         SetCommonFont(hDataFilesLabel);
         SetCommonFont(hLeftFrame);
         SetCommonFont(hPluginList);
+        SetCommonFont(hHallOfFame);
         SetCommonFont(hPluginName);
         SetCommonFont(hCreatedBy);
         SetCommonFont(hDescription);
@@ -426,6 +452,10 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
         PopulatePluginList(hPluginList);
         SelectFirstPlugin();
+
+        srand((unsigned int)GetTickCount());
+        UpdateHallOfFameLabel();
+        SetTimer(hwnd, 1, 5000, NULL);
         return 0;
     }
 
@@ -440,6 +470,13 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         }
         break;
     }
+
+    case WM_TIMER:
+        if (wParam == 1) {
+            UpdateHallOfFameLabel();
+            return 0;
+        }
+        break;
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -461,13 +498,16 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         return 0;
 
     case WM_NCDESTROY:
+        KillTimer(hwnd, 1);
         hPluginList = NULL;
+        hHallOfFame = NULL;
         hPluginName = NULL;
         hCreatedBy = NULL;
         hDescription = NULL;
         hCreatedOn = NULL;
         hModifiedOn = NULL;
         g_hCommonFont = NULL;
+        gHallOfFameIndex = -1;
         break;
     }
 
