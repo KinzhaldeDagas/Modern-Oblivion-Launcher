@@ -49,8 +49,8 @@ static ULONG_PTR g_gdiplusToken = 0;
 static Image* g_pBackground = nullptr;
 static Image* g_pButtonBg = nullptr;
 static HFONT  g_hCustomFont = nullptr;
+static HANDLE g_hFontMemResource = nullptr;
 static std::wstring g_fontFaceName;
-static std::wstring g_fontFilePath;
 static HINSTANCE g_hInstance = nullptr;
 static HWND g_hLaunchCseButton = nullptr;
 static ConstructionSetLaunchMode g_csLaunchMode = ConstructionSetLaunchMode::None;
@@ -142,33 +142,6 @@ static std::wstring ParentDir(std::wstring p) {
     return tmp;
 }
 
-static std::wstring FindFontFileNearSolutionRoot() {
-    // Expected: oblivionfont.ttf next to the .sln.
-    const std::wstring fontName = L"oblivionfont.ttf";
-    const std::wstring slnName = L"Modern Oblivion Launcher.sln";
-
-    std::vector<std::wstring> roots;
-    {
-        wchar_t cwd[MAX_PATH] = {};
-        GetCurrentDirectoryW(MAX_PATH, cwd);
-        roots.push_back(cwd);
-    }
-    roots.push_back(GetExeDir());
-
-    for (const auto& start : roots) {
-        std::wstring dir = start;
-        for (int i = 0; i < 6 && !dir.empty(); i++) {
-            const std::wstring fontPath = JoinPath(dir, fontName);
-            if (PathFileExistsW(fontPath.c_str())) return fontPath;
-
-            const std::wstring slnPath = JoinPath(dir, slnName);
-            if (PathFileExistsW(slnPath.c_str())) return fontPath;
-            dir = ParentDir(dir);
-        }
-    }
-    return L"";
-}
-
 static uint16_t ReadU16BE(const uint8_t* p) {
     return (uint16_t)((p[0] << 8) | p[1]);
 }
@@ -176,16 +149,7 @@ static uint32_t ReadU32BE(const uint8_t* p) {
     return (uint32_t)((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]);
 }
 
-static std::wstring ExtractFamilyNameFromTTF(const std::wstring& ttfPath) {
-    std::ifstream f(ttfPath, std::ios::binary);
-    if (!f) return L"";
-    f.seekg(0, std::ios::end);
-    const std::streamoff sz = f.tellg();
-    if (sz <= 0 || sz > (50ll * 1024ll * 1024ll)) return L"";
-    f.seekg(0, std::ios::beg);
-    std::vector<uint8_t> bytes((size_t)sz);
-    f.read((char*)bytes.data(), sz);
-    if (!f) return L"";
+static std::wstring ExtractFamilyNameFromTTF(const std::vector<uint8_t>& bytes) {
     if (bytes.size() < 12) return L"";
 
     const uint16_t numTables = ReadU16BE(&bytes[4]);
@@ -253,13 +217,23 @@ static std::wstring ExtractFamilyNameFromTTF(const std::wstring& ttfPath) {
 }
 
 static HFONT LoadOblivionFontFromFile(float pt, bool bold) {
-    g_fontFilePath = FindFontFileNearSolutionRoot();
-    if (g_fontFilePath.empty()) return nullptr;
+    DWORD dataSize = 0;
+    HGLOBAL data = LoadResourceData(IDR_FONT_TTF, RT_RCDATA, dataSize);
+    if (!data || dataSize == 0) return nullptr;
 
-    g_fontFaceName = ExtractFamilyNameFromTTF(g_fontFilePath);
+    std::vector<uint8_t> fontBytes(dataSize);
+    memcpy(fontBytes.data(), data, dataSize);
+    GlobalFree(data);
+
+    DWORD fontsInstalled = 0;
+    g_hFontMemResource = AddFontMemResourceEx(fontBytes.data(), dataSize, nullptr, &fontsInstalled);
+    if (!g_hFontMemResource || fontsInstalled == 0) {
+        g_hFontMemResource = nullptr;
+        return nullptr;
+    }
+
+    g_fontFaceName = ExtractFamilyNameFromTTF(fontBytes);
     if (g_fontFaceName.empty()) g_fontFaceName = L"Oblivion";
-
-    AddFontResourceExW(g_fontFilePath.c_str(), FR_PRIVATE, nullptr);
 
     HDC hdc = GetDC(nullptr);
     const int logpx = GetDeviceCaps(hdc, LOGPIXELSY);
@@ -655,9 +629,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
     if (g_pButtonBg) { delete g_pButtonBg;   g_pButtonBg = nullptr; }
     if (g_hCustomFont) { DeleteObject(g_hCustomFont); g_hCustomFont = nullptr; }
 
-    if (!g_fontFilePath.empty()) {
-        RemoveFontResourceExW(g_fontFilePath.c_str(), FR_PRIVATE, nullptr);
-        g_fontFilePath.clear();
+    if (g_hFontMemResource) {
+        RemoveFontMemResourceEx(g_hFontMemResource);
+        g_hFontMemResource = nullptr;
         g_fontFaceName.clear();
     }
 
