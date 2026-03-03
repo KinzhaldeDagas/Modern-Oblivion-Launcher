@@ -52,7 +52,6 @@ static std::wstring g_fontFaceName;
 static std::wstring g_fontFilePath;
 static HINSTANCE g_hInstance = nullptr;
 static HWND g_hLaunchCseButton = nullptr;
-static bool g_enableConstructionSetButton = true;
 static ConstructionSetLaunchMode g_csLaunchMode = ConstructionSetLaunchMode::None;
 static std::wstring g_csLaunchPath;
 static std::wstring g_csLaunchWorkingDir;
@@ -473,10 +472,9 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_CREATE: {
         g_hCustomFont = LoadOblivionFontFromFile(18.0f, false);
         DetectConstructionSetLaunchTarget();
-        g_enableConstructionSetButton = IsConstructionSetButtonEnabled();
 
         int xPos = WINDOW_WIDTH - BUTTON_WIDTH - 128 - EXTRA_LEFT_SHIFT;
-        const bool showLaunchCs = g_enableConstructionSetButton;
+        const bool showLaunchCs = IsConstructionSetButtonEnabled();
         const int totalBtns = showLaunchCs ? 6 : 5;
         const int totalHeight = totalBtns * BUTTON_HEIGHT + (totalBtns - 1) * BUTTON_SPACING;
         const int startY = (WINDOW_HEIGHT - totalHeight) / 2;

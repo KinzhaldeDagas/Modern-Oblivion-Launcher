@@ -9,7 +9,6 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <cstdlib>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
@@ -20,6 +19,7 @@
 #define IDC_CANCEL_BUTTON    1003
 #define IDC_RESET_BUTTON     1004
 #define IDC_DESCRIPTION_EDIT 1005
+#define IDT_HALL_OF_FAME   2001
 
 namespace {
 
@@ -41,6 +41,17 @@ static const std::vector<std::wstring> kHallOfFame = {
     L"Daggers", L"Alenet", L"llde", L"ponyrider0", L"gbr", L"shademe"
 };
 static int gHallOfFameIndex = -1;
+static uint32_t gHallOfFameRngState = 0;
+
+static uint32_t NextRandomU32() {
+    if (gHallOfFameRngState == 0) {
+        gHallOfFameRngState = (uint32_t)GetTickCount() ^ (uint32_t)GetCurrentProcessId() ^ 0xA341316Cu;
+    }
+    gHallOfFameRngState ^= gHallOfFameRngState << 13;
+    gHallOfFameRngState ^= gHallOfFameRngState >> 17;
+    gHallOfFameRngState ^= gHallOfFameRngState << 5;
+    return gHallOfFameRngState;
+}
 
 static void UpdateHallOfFameLabel() {
     if (!hHallOfFame || kHallOfFame.empty()) return;
@@ -48,7 +59,7 @@ static void UpdateHallOfFameLabel() {
     int nextIndex = 0;
     if (kHallOfFame.size() > 1) {
         do {
-            nextIndex = rand() % (int)kHallOfFame.size();
+            nextIndex = (int)(NextRandomU32() % (uint32_t)kHallOfFame.size());
         } while (nextIndex == gHallOfFameIndex);
     }
 
@@ -453,9 +464,9 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         PopulatePluginList(hPluginList);
         SelectFirstPlugin();
 
-        srand((unsigned int)GetTickCount());
+        gHallOfFameRngState = (uint32_t)GetTickCount() ^ (uint32_t)GetCurrentProcessId() ^ 0xC2B2AE35u;
         UpdateHallOfFameLabel();
-        SetTimer(hwnd, 1, 5000, NULL);
+        SetTimer(hwnd, IDT_HALL_OF_FAME, 5000, NULL);
         return 0;
     }
 
@@ -472,7 +483,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
     }
 
     case WM_TIMER:
-        if (wParam == 1) {
+        if (wParam == IDT_HALL_OF_FAME) {
             UpdateHallOfFameLabel();
             return 0;
         }
@@ -498,7 +509,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         return 0;
 
     case WM_NCDESTROY:
-        KillTimer(hwnd, 1);
+        KillTimer(hwnd, IDT_HALL_OF_FAME);
         hPluginList = NULL;
         hHallOfFame = NULL;
         hPluginName = NULL;
@@ -508,6 +519,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         hModifiedOn = NULL;
         g_hCommonFont = NULL;
         gHallOfFameIndex = -1;
+        gHallOfFameRngState = 0;
         break;
     }
 
