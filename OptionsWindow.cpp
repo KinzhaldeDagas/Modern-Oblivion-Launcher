@@ -146,6 +146,7 @@ static HWND gInvertMouseCheck = nullptr;
 static HWND gAlwaysRunCheck = nullptr;
 
 static HWND gDisableBorderRegionsCheck = nullptr;
+static HWND gEnableConstructionSetButtonCheck = nullptr;
 
 static HWND gDevAllowScreenshotCheck = nullptr;
 static HWND gDevFileLoggingCheck = nullptr;
@@ -220,6 +221,7 @@ static const int IDC_INVERTMOUSE = 1602;
 static const int IDC_ALWAYSRUN = 1603;
 
 static const int IDC_DISABLE_BORDER = 1700;
+static const int IDC_ENABLE_CS_BUTTON = 1701;
 
 static const int IDC_DEV_ALLOWSCREENSHOT = 1900;
 static const int IDC_DEV_FILELOGGING = 1901;
@@ -1299,6 +1301,8 @@ static void ApplyControlsToINI()
 
     WriteINIInt(L"MAIN", L"bEnableBorderRegion",
         (SendMessageW(gDisableBorderRegionsCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 0 : 1);
+    WriteINIInt(L"Launcher", L"bEnableConstructionSetButton",
+        (SendMessageW(gEnableConstructionSetButtonCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
 
     WriteINIInt(L"Display", L"bAllowScreenShot", (SendMessageW(gDevAllowScreenshotCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
     WriteINIInt(L"Messages", L"iFileLogging", (SendMessageW(gDevFileLoggingCheck, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0);
@@ -1701,6 +1705,8 @@ static void LoadFromINI()
 
     int ber = GetINIInt(L"MAIN", L"bEnableBorderRegion", 1);
     SendMessageW(gDisableBorderRegionsCheck, BM_SETCHECK, (ber == 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(gEnableConstructionSetButtonCheck, BM_SETCHECK,
+        GetINIInt(L"Launcher", L"bEnableConstructionSetButton", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
 
     SendMessageW(gDevAllowScreenshotCheck, BM_SETCHECK, GetINIInt(L"Display", L"bAllowScreenShot", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(gDevFileLoggingCheck, BM_SETCHECK, GetINIInt(L"Messages", L"iFileLogging", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -2256,7 +2262,7 @@ static void BuildUI(HWND hwnd)
 
     // GAMEPLAY
     {
-        const int gbH = sx(112);
+        const int gbH = sx(146);
         CreateGroupBox(gContent, L"Gameplay", pad, y, contentW, gbH);
 
         int ry = y + sx(28);
@@ -2265,6 +2271,10 @@ static void BuildUI(HWND hwnd)
 
         ry += rowH + rowGap;
         gUseBlurShaderCheck = CreateCheckbox(gContent, L"Use Blur Shader", IDC_BLUR_SHADER, LxLabel, AlignLabelY(ry) - sx(2), sx(220), sx(20));
+
+        ry += rowH + rowGap;
+        gEnableConstructionSetButtonCheck = CreateCheckbox(gContent, L"Enable Construction Set button?", IDC_ENABLE_CS_BUTTON,
+            LxLabel, AlignLabelY(ry) - sx(2), sx(320), sx(20));
 
         y += gbH + sx(12);
     }
