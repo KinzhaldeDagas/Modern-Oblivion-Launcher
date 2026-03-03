@@ -15,6 +15,7 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#include <iomanip>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
@@ -92,6 +93,27 @@ static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     if (b.empty()) return a;
     if (a.back() == L'\\') return a + b;
     return a + L"\\" + b;
+}
+
+static std::wstring GetExeDir() {
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(NULL, path, MAX_PATH);
+    PathRemoveFileSpecW(path);
+    return path;
+}
+
+static void AppendDataFilesSortLog(const std::wstring& message) {
+    const std::wstring logPath = JoinPath(GetExeDir(), L"DataFilesSort.log");
+    std::wofstream out(logPath, std::ios::app);
+    if (!out) return;
+
+    SYSTEMTIME now = {};
+    GetLocalTime(&now);
+    out << L"[" << now.wYear << L"-" << std::setw(2) << std::setfill(L'0') << now.wMonth
+        << L"-" << std::setw(2) << now.wDay
+        << L" " << std::setw(2) << now.wHour << L":" << std::setw(2) << now.wMinute
+        << L":" << std::setw(2) << now.wSecond << L"] "
+        << message << std::endl;
 }
 
 static bool EqualsNoCase(const std::wstring& a, const std::wstring& b) {
@@ -448,6 +470,8 @@ static TimestampApplyResult SetPluginTimestampByOrder(const std::vector<std::wst
 static void SortPluginsSuggestedLoadOrder() {
     if (!hPluginList || pluginFiles.empty()) return;
 
+    AppendDataFilesSortLog(L"Sort requested for " + std::to_wstring(pluginFiles.size()) + L" plugins.");
+
     std::map<std::wstring, bool> checkStateByPlugin;
     std::wstring selectedPluginLower;
     const int itemCount = ListView_GetItemCount(hPluginList);
@@ -547,6 +571,7 @@ static void SortPluginsSuggestedLoadOrder() {
     }
 
     if (order.size() != pluginFiles.size()) {
+        AppendDataFilesSortLog(L"Sort failed: cyclic dependency graph detected.");
         MessageBoxW(NULL,
             L"Sorting failed: cyclic plugin dependencies detected.\n"
             L"Please resolve conflicting master/dependency relationships and try again.",
@@ -572,6 +597,7 @@ static void SortPluginsSuggestedLoadOrder() {
             warning += L"\n- Some plugin headers could not be parsed; extension/fallback ordering was used.";
         }
 
+        AppendDataFilesSortLog(warning);
         MessageBoxW(NULL, warning.c_str(), L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
     }
 
@@ -583,11 +609,13 @@ static void SortPluginsSuggestedLoadOrder() {
 
     const TimestampApplyResult timestampResult = SetPluginTimestampByOrder(reordered);
     if (timestampResult == TimestampApplyResult::FailedRestored) {
+        AppendDataFilesSortLog(L"Timestamp apply failed. Original timestamps restored.");
         MessageBoxW(NULL,
             L"Load order was computed, but file timestamps could not be updated.\n"
             L"Original timestamps were restored.",
             L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
     } else if (timestampResult == TimestampApplyResult::FailedRestoreError) {
+        AppendDataFilesSortLog(L"Timestamp apply failed and rollback incomplete.");
         MessageBoxW(NULL,
             L"Load order timestamp update failed and rollback was incomplete.\n"
             L"Please verify plugin file timestamps before launching the game.",

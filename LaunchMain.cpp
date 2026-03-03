@@ -332,6 +332,11 @@ static bool IsConstructionSetButtonEnabled() {
     return GetINIInt(L"Launcher", L"bEnableConstructionSetButton", 1) != 0;
 }
 
+static bool ShouldCloseLauncherOnLaunch() {
+    InitializeINI();
+    return GetINIInt(L"Launcher", L"bCloseOnLaunch", 0) != 0;
+}
+
 static void DetectConstructionSetLaunchTarget() {
     g_csLaunchMode = ConstructionSetLaunchMode::None;
     g_csLaunchPath.clear();
@@ -541,9 +546,15 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (LOWORD(wParam)) {
         case ID_BUTTON_PLAY:
             LaunchObseLoader();
+            if (ShouldCloseLauncherOnLaunch()) {
+                DestroyWindow(hWnd);
+            }
             return 0;
         case ID_BUTTON_LAUNCH_CSE:
             LaunchConstructionSet();
+            if (ShouldCloseLauncherOnLaunch()) {
+                DestroyWindow(hWnd);
+            }
             return 0;
         case ID_BUTTON_OPTIONS:
             OpenOptionsWindow(hWnd);
