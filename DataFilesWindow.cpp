@@ -378,12 +378,18 @@ static bool RestorePluginWriteTimes(const std::vector<PluginTimeSnapshot>& snaps
     return true;
 }
 
-static bool SetPluginTimestampByOrder(const std::vector<std::wstring>& orderedPlugins) {
-    if (orderedPlugins.empty()) return true;
+enum class TimestampApplyResult {
+    Success,
+    FailedRestored,
+    FailedRestoreError
+};
+
+static TimestampApplyResult SetPluginTimestampByOrder(const std::vector<std::wstring>& orderedPlugins) {
+    if (orderedPlugins.empty()) return TimestampApplyResult::Success;
 
     std::vector<PluginTimeSnapshot> originalTimes;
     if (!CapturePluginWriteTimes(orderedPlugins, &originalTimes)) {
-        return false;
+        return TimestampApplyResult::FailedRestored;
     }
 
     SYSTEMTIME st = {};
@@ -397,7 +403,7 @@ static bool SetPluginTimestampByOrder(const std::vector<std::wstring>& orderedPl
 
     FILETIME baseUtc = {};
     if (!SystemTimeToFileTime(&st, &baseUtc)) {
-        return false;
+        return TimestampApplyResult::FailedRestored;
     }
 
     ULARGE_INTEGER tick = {};
@@ -431,11 +437,11 @@ static bool SetPluginTimestampByOrder(const std::vector<std::wstring>& orderedPl
     }
 
     if (!success) {
-        RestorePluginWriteTimes(originalTimes);
-        return false;
+        const bool restored = RestorePluginWriteTimes(originalTimes);
+        return restored ? TimestampApplyResult::FailedRestored : TimestampApplyResult::FailedRestoreError;
     }
 
-    return true;
+    return TimestampApplyResult::Success;
 }
 
 
@@ -548,18 +554,25 @@ static void SortPluginsSuggestedLoadOrder() {
         return;
     }
 
-    if (!unresolvedMasters.empty()) {
-        MessageBoxW(NULL,
-            L"One or more masters referenced by plugins were not found in the current Data Files list.\n"
-            L"Sorting continued using available dependency information.",
-            L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
-    }
+    if (!unresolvedMasters.empty() || hadMetadataReadFailure) {
+        std::wstring warning = L"Sort completed with warnings:\n";
 
-    if (hadMetadataReadFailure) {
-        MessageBoxW(NULL,
-            L"Some plugin headers could not be parsed completely.\n"
-            L"Sorting used fallback rules for those files.",
-            L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
+        if (!unresolvedMasters.empty()) {
+            warning += L"\n- Missing masters in Data Files list: " + std::to_wstring(unresolvedMasters.size());
+            const size_t previewCount = std::min<size_t>(3, unresolvedMasters.size());
+            for (size_t i = 0; i < previewCount; ++i) {
+                warning += L"\n  * " + unresolvedMasters[i];
+            }
+            if (unresolvedMasters.size() > previewCount) {
+                warning += L"\n  * ...";
+            }
+        }
+
+        if (hadMetadataReadFailure) {
+            warning += L"\n- Some plugin headers could not be parsed; extension/fallback ordering was used.";
+        }
+
+        MessageBoxW(NULL, warning.c_str(), L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
     }
 
     std::vector<std::wstring> reordered;
@@ -568,11 +581,17 @@ static void SortPluginsSuggestedLoadOrder() {
         reordered.push_back(pluginFiles[idx]);
     }
 
-    if (!SetPluginTimestampByOrder(reordered)) {
+    const TimestampApplyResult timestampResult = SetPluginTimestampByOrder(reordered);
+    if (timestampResult == TimestampApplyResult::FailedRestored) {
         MessageBoxW(NULL,
             L"Load order was computed, but file timestamps could not be updated.\n"
-            L"Oblivion uses timestamps for effective load order.",
+            L"Original timestamps were restored.",
             L"Oblivion: Data Files", MB_OK | MB_ICONWARNING);
+    } else if (timestampResult == TimestampApplyResult::FailedRestoreError) {
+        MessageBoxW(NULL,
+            L"Load order timestamp update failed and rollback was incomplete.\n"
+            L"Please verify plugin file timestamps before launching the game.",
+            L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
     }
 
     pluginFiles = std::move(reordered);
