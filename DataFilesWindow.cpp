@@ -19,6 +19,7 @@
 #define IDC_CANCEL_BUTTON    1003
 #define IDC_RESET_BUTTON     1004
 #define IDC_DESCRIPTION_EDIT 1005
+#define IDT_HALL_OF_FAME   2001
 
 namespace {
 
@@ -34,6 +35,37 @@ static HWND hModifiedOn = NULL;
 
 static std::wstring dataPath;
 static HFONT g_hCommonFont = NULL;
+
+static const std::vector<std::wstring> kHallOfFame = {
+    L"Daggers", L"Alenet", L"llde", L"ponyrider0", L"gbr", L"shademe"
+};
+static int gHallOfFameIndex = -1;
+static uint32_t gHallOfFameRngState = 0;
+
+static uint32_t NextRandomU32() {
+    if (gHallOfFameRngState == 0) {
+        gHallOfFameRngState = (uint32_t)GetTickCount() ^ (uint32_t)GetCurrentProcessId() ^ 0xA341316Cu;
+    }
+    gHallOfFameRngState ^= gHallOfFameRngState << 13;
+    gHallOfFameRngState ^= gHallOfFameRngState >> 17;
+    gHallOfFameRngState ^= gHallOfFameRngState << 5;
+    return gHallOfFameRngState;
+}
+
+static void UpdateHallOfFameTitle(HWND hwnd) {
+    if (!hwnd || kHallOfFame.empty()) return;
+
+    int nextIndex = 0;
+    if (kHallOfFame.size() > 1) {
+        do {
+            nextIndex = (int)(NextRandomU32() % (uint32_t)kHallOfFame.size());
+        } while (nextIndex == gHallOfFameIndex);
+    }
+
+    gHallOfFameIndex = nextIndex;
+    const std::wstring text = L"[HALL OF FAME: " + kHallOfFame[(size_t)gHallOfFameIndex] + L"] Oblivion: Data Files.";
+    SetWindowTextW(hwnd, text.c_str());
+}
 
 static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     if (a.empty()) return b;
@@ -359,15 +391,9 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
         g_hCommonFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
-        HWND hDataFilesLabel = CreateWindowW(L"STATIC", L"Data Files:", WS_VISIBLE | WS_CHILD,
-            18, 18, 100, 22, hwnd, NULL, NULL, NULL);
-
-        HWND hLeftFrame = CreateWindowW(L"BUTTON", L"", WS_VISIBLE | WS_CHILD | BS_GROUPBOX,
-            18, 42, 348, 474, hwnd, NULL, NULL, NULL);
-
         hPluginList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, NULL,
             WS_VISIBLE | WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER,
-            28, 56, 338, 434,
+            18, 18, 348, 498,
             hwnd, (HMENU)IDC_PLUGIN_LIST, NULL, NULL);
 
         hPluginName = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD,
@@ -399,15 +425,13 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             524, 530, 136, 36,
             hwnd, (HMENU)IDC_OK_BUTTON, NULL, NULL);
 
-        if (!hDataFilesLabel || !hLeftFrame || !hPluginList || !hPluginName || !hCreatedBy ||
+        if (!hPluginList || !hPluginName || !hCreatedBy ||
             !hDescription || !hCreatedOn || !hModifiedOn || !hReset || !hCancel || !hOk) {
             MessageBoxW(hwnd, L"Failed to create Data Files controls.", L"Oblivion: Data Files", MB_OK | MB_ICONERROR);
             DestroyWindow(hwnd);
             return -1;
         }
 
-        SetCommonFont(hDataFilesLabel);
-        SetCommonFont(hLeftFrame);
         SetCommonFont(hPluginList);
         SetCommonFont(hPluginName);
         SetCommonFont(hCreatedBy);
@@ -421,11 +445,15 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         ListView_SetExtendedListViewStyle(hPluginList, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
         LVCOLUMNW col = {};
         col.mask = LVCF_WIDTH;
-        col.cx = 318;
+        col.cx = 326;
         ListView_InsertColumn(hPluginList, 0, &col);
 
         PopulatePluginList(hPluginList);
         SelectFirstPlugin();
+
+        gHallOfFameRngState = (uint32_t)GetTickCount() ^ (uint32_t)GetCurrentProcessId() ^ 0xC2B2AE35u;
+        UpdateHallOfFameTitle(hwnd);
+        SetTimer(hwnd, IDT_HALL_OF_FAME, 5000, NULL);
         return 0;
     }
 
@@ -440,6 +468,13 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         }
         break;
     }
+
+    case WM_TIMER:
+        if (wParam == IDT_HALL_OF_FAME) {
+            UpdateHallOfFameTitle(hwnd);
+            return 0;
+        }
+        break;
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -461,6 +496,7 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         return 0;
 
     case WM_NCDESTROY:
+        KillTimer(hwnd, IDT_HALL_OF_FAME);
         hPluginList = NULL;
         hPluginName = NULL;
         hCreatedBy = NULL;
@@ -468,6 +504,8 @@ LRESULT CALLBACK DataFilesWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
         hCreatedOn = NULL;
         hModifiedOn = NULL;
         g_hCommonFont = NULL;
+        gHallOfFameIndex = -1;
+        gHallOfFameRngState = 0;
         break;
     }
 
