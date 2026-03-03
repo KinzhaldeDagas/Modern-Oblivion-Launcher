@@ -70,37 +70,6 @@ static void UpdateHallOfFameTitle(HWND hwnd) {
     SetWindowTextW(hwnd, text.c_str());
 }
 
-static const std::vector<std::wstring> kHallOfFame = {
-    L"Daggers", L"Alenet", L"llde", L"ponyrider0", L"gbr", L"shademe"
-};
-static int gHallOfFameIndex = -1;
-static uint32_t gHallOfFameRngState = 0;
-
-static uint32_t NextRandomU32() {
-    if (gHallOfFameRngState == 0) {
-        gHallOfFameRngState = (uint32_t)GetTickCount() ^ (uint32_t)GetCurrentProcessId() ^ 0xA341316Cu;
-    }
-    gHallOfFameRngState ^= gHallOfFameRngState << 13;
-    gHallOfFameRngState ^= gHallOfFameRngState >> 17;
-    gHallOfFameRngState ^= gHallOfFameRngState << 5;
-    return gHallOfFameRngState;
-}
-
-static void UpdateHallOfFameTitle(HWND hwnd) {
-    if (!hwnd || kHallOfFame.empty()) return;
-
-    int nextIndex = 0;
-    if (kHallOfFame.size() > 1) {
-        do {
-            nextIndex = (int)(NextRandomU32() % (uint32_t)kHallOfFame.size());
-        } while (nextIndex == gHallOfFameIndex);
-    }
-
-    gHallOfFameIndex = nextIndex;
-    const std::wstring text = L"[HALL OF FAME: " + kHallOfFame[(size_t)gHallOfFameIndex] + L"] Oblivion: Data Files.";
-    SetWindowTextW(hwnd, text.c_str());
-}
-
 static std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
     if (a.empty()) return b;
     if (b.empty()) return a;
