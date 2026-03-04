@@ -50,6 +50,7 @@ static Image* g_pBackground = nullptr;
 static Image* g_pButtonBg = nullptr;
 static HFONT  g_hCustomFont = nullptr;
 static HANDLE g_hFontMemResource = nullptr;
+static std::vector<uint8_t> g_fontBytes;
 static std::wstring g_fontFaceName;
 static HINSTANCE g_hInstance = nullptr;
 static HWND g_hLaunchCseButton = nullptr;
@@ -177,38 +178,58 @@ static std::wstring ExtractFamilyNameFromTTF(const std::vector<uint8_t>& bytes) 
     if (6ull + (size_t)count * 12ull > nameLength) return L"";
     if ((size_t)stringOffset > nameLength) return L"";
 
-    auto pick = [&](uint16_t wantedNameId) -> std::wstring {
-        for (uint16_t i = 0; i < count; i++) {
-            const uint8_t* r = nt + 6 + (size_t)i * 12;
-            const uint16_t platformID = ReadU16BE(r + 0);
-            const uint16_t encodingID = ReadU16BE(r + 2);
-            const uint16_t languageID = ReadU16BE(r + 4);
-            const uint16_t nameID = ReadU16BE(r + 6);
-            const uint16_t len = ReadU16BE(r + 8);
-            const uint16_t roff = ReadU16BE(r + 10);
+    auto decodeNameRecord = [&](const uint8_t* r) -> std::wstring {
+        const uint16_t platformID = ReadU16BE(r + 0);
+        const uint16_t encodingID = ReadU16BE(r + 2);
+        const uint16_t len = ReadU16BE(r + 8);
+        const uint16_t roff = ReadU16BE(r + 10);
 
-            if (platformID != 3) continue; // Windows
-            if (!(encodingID == 0 || encodingID == 1 || encodingID == 10)) continue;
-            if (languageID != 0x0409) continue; // en-US
-            if (nameID != wantedNameId) continue;
+        const size_t sbase = nameOffset + (size_t)stringOffset + (size_t)roff;
+        if (sbase + len > bytes.size()) return L"";
+        if (len == 0) return L"";
 
-            const size_t sbase = nameOffset + (size_t)stringOffset + (size_t)roff;
-            if (sbase + len > bytes.size()) continue;
-            if (len < 2) continue;
-
-            std::wstring out;
+        std::wstring out;
+        // Windows + Unicode encodings and Unicode platform are UTF-16BE.
+        if ((platformID == 3 && (encodingID == 0 || encodingID == 1 || encodingID == 10)) || platformID == 0) {
+            if (len < 2) return L"";
             out.reserve(len / 2);
             for (size_t j = 0; j + 1 < len; j += 2) {
-                const uint8_t b0 = bytes[sbase + j];
-                const uint8_t b1 = bytes[sbase + j + 1];
-                const wchar_t wc = (wchar_t)((b0 << 8) | b1);
-                if (wc == 0) continue;
-                out.push_back(wc);
+                const wchar_t wc = (wchar_t)((bytes[sbase + j] << 8) | bytes[sbase + j + 1]);
+                if (wc != 0) out.push_back(wc);
             }
-            return out;
+        }
+        else {
+            // Fallback: treat as single-byte encoding.
+            out.reserve(len);
+            for (size_t j = 0; j < len; ++j) {
+                const wchar_t wc = (wchar_t)bytes[sbase + j];
+                if (wc != 0) out.push_back(wc);
+            }
+        }
+        return out;
+    };
+
+    auto pick = [&](uint16_t wantedNameId) -> std::wstring {
+        // First pass: prefer en-US records.
+        for (uint16_t i = 0; i < count; i++) {
+            const uint8_t* r = nt + 6 + (size_t)i * 12;
+            const uint16_t languageID = ReadU16BE(r + 4);
+            const uint16_t nameID = ReadU16BE(r + 6);
+            if (nameID != wantedNameId || languageID != 0x0409) continue;
+            std::wstring out = decodeNameRecord(r);
+            if (!out.empty()) return out;
+        }
+
+        // Second pass: accept any language.
+        for (uint16_t i = 0; i < count; i++) {
+            const uint8_t* r = nt + 6 + (size_t)i * 12;
+            const uint16_t nameID = ReadU16BE(r + 6);
+            if (nameID != wantedNameId) continue;
+            std::wstring out = decodeNameRecord(r);
+            if (!out.empty()) return out;
         }
         return L"";
-        };
+    };
 
     std::wstring fam = pick(1); // Font Family
     if (!fam.empty()) return fam;
@@ -221,18 +242,18 @@ static HFONT LoadOblivionFontFromFile(float pt, bool bold) {
     HGLOBAL data = LoadResourceData(IDR_FONT_TTF, RT_RCDATA, dataSize);
     if (!data || dataSize == 0) return nullptr;
 
-    std::vector<uint8_t> fontBytes(dataSize);
-    memcpy(fontBytes.data(), data, dataSize);
+    g_fontBytes.assign((uint8_t*)data, (uint8_t*)data + dataSize);
     GlobalFree(data);
 
     DWORD fontsInstalled = 0;
-    g_hFontMemResource = AddFontMemResourceEx(fontBytes.data(), dataSize, nullptr, &fontsInstalled);
+    g_hFontMemResource = AddFontMemResourceEx(g_fontBytes.data(), (DWORD)g_fontBytes.size(), nullptr, &fontsInstalled);
     if (!g_hFontMemResource || fontsInstalled == 0) {
         g_hFontMemResource = nullptr;
+        g_fontBytes.clear();
         return nullptr;
     }
 
-    g_fontFaceName = ExtractFamilyNameFromTTF(fontBytes);
+    g_fontFaceName = ExtractFamilyNameFromTTF(g_fontBytes);
     if (g_fontFaceName.empty()) g_fontFaceName = L"Oblivion";
 
     HDC hdc = GetDC(nullptr);
@@ -633,6 +654,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
         RemoveFontMemResourceEx(g_hFontMemResource);
         g_hFontMemResource = nullptr;
         g_fontFaceName.clear();
+        g_fontBytes.clear();
     }
 
     GdiplusShutdown(g_gdiplusToken);
